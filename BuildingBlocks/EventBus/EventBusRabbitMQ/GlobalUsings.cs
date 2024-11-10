@@ -1,0 +1,13 @@
+﻿global using System;
+global using System.Collections.Generic;
+global using System.Net.Sockets;
+global using System.Threading.Tasks;
+global using System.Text;
+global using System.Text.Json;
+global using Staging.BuildingBlocks.EventBus.EventBus.Abstractions;
+global using Staging.BuildingBlocks.EventBus.EventBus.Events;
+global using Microsoft.Extensions.Logging;
+global using Polly;
+global using RabbitMQ.Client;
+global using RabbitMQ.Client.Events;
+global using RabbitMQ.Client.Exceptions;
