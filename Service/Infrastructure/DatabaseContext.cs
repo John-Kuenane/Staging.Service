@@ -1,4 +1,7 @@
-﻿namespace Staging.Infrastructure;
+﻿using MISSA.Services.Staging.Domain.AggregatesModel.PackageAggregate;
+using MISSA.Services.Staging.Infrastructure;
+
+namespace Staging.Infrastructure;
 
 /// <remarks>
 /// Add migrations using the following command inside the 'Ordering.Infrastructure' project directory:
@@ -9,6 +12,8 @@ public class DatabaseContext : DbContext, IUnitOfWork
 {
     private readonly IMediator _mediator;
     private IDbContextTransaction _currentTransaction;
+
+    public DbSet<Package> Packages { get; set; }
 
     public DatabaseContext(DbContextOptions<DatabaseContext> options) : base(options) { }
 
@@ -26,6 +31,18 @@ public class DatabaseContext : DbContext, IUnitOfWork
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasDefaultSchema("staging");
+
+        modelBuilder.ApplyConfiguration(new PackageEntityTypeConfiguration());
+        modelBuilder.ApplyConfiguration(new PackageEventEntityTypeConfiguration());
+        modelBuilder.ApplyConfiguration(new PackageEventDataFlagEntityTypeConfiguration());
+        modelBuilder.ApplyConfiguration(new PackageEventDataFlagCommentEntityTypeConfiguration());
+        modelBuilder.ApplyConfiguration(new PackageEventDeviceEntityTypeConfiguration());
+        modelBuilder.ApplyConfiguration(new PackageEventHouseholdEntityTypeConfiguration());
+        modelBuilder.ApplyConfiguration(new PackageEventHouseholdAttributeEntityTypeConfiguration());
+        modelBuilder.ApplyConfiguration(new PackageEventHouseholdMemberEntityTypeConfiguration());
+        modelBuilder.ApplyConfiguration(new PackageEventHouseholdMemberAttributeEntityTypeConfiguration());
+        modelBuilder.ApplyConfiguration(new PackageEventHouseholdSynchEntityTypeConfiguration());
+        modelBuilder.ApplyConfiguration(new PackageEventHouseholdSynchMetaAttributesEntityTypeConfiguration());
 
         //modelBuilder.UseIntegrationEventLogs();
     }
