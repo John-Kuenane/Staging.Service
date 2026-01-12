@@ -3,8 +3,8 @@
 public abstract class Entity
 {
     int? _requestedHashCode;
-    Guid _Id;
-    public virtual Guid Id
+    int _Id;
+    public virtual int Id
     {
         get
         {
@@ -37,7 +37,7 @@ public abstract class Entity
 
     public bool IsTransient()
     {
-        return this.Id == default(Guid);
+        return this.Id == default(int);
     }
 
     public override bool Equals(object obj)
