@@ -1,6 +1,4 @@
-﻿using Staging.Domain.AggregatesModel.PackageAggregate;
-
-namespace MISSA.Services.Staging.Domain.AggregatesModel.PackageAggregate;
+﻿namespace Staging.Domain.AggregatesModel.PackageAggregate;
 
 public class PackageEventHouseholdAttribute
     : Entity
@@ -20,5 +18,15 @@ public class PackageEventHouseholdAttribute
     {
         AttributeKey = attributeKey;
         Original = original;
+    }
+
+    public void UpdateValue(AttributeValue newValue)
+    {
+        if (Original == newValue)
+        {
+            return;
+        }
+
+        Modified = newValue;
     }
 }

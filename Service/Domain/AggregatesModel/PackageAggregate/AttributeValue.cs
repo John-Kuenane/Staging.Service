@@ -6,13 +6,15 @@ public class AttributeValue : ValueObject
 {
     public string SelectionKey { get; private set; }
     public string SelectionValue { get; private set; }
+    public string Value { get; private set; }
 
     public AttributeValue() { }
 
-    public AttributeValue(string selectionKey, string selectionValue)
+    public AttributeValue(string selectionKey, string selectionValue, string value)
     {
         SelectionKey = selectionKey;
         SelectionValue = selectionValue;
+        Value = value;
     }
 
     protected override IEnumerable<object> GetEqualityComponents()
@@ -20,5 +22,6 @@ public class AttributeValue : ValueObject
         // Using a yield return statement to return each element one at a time
         yield return SelectionKey;
         yield return SelectionValue;
+        yield return Value;
     }
 }

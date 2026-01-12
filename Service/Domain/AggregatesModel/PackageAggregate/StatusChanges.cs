@@ -24,7 +24,7 @@ public class StatusChange : ValueObject
     private void SetStatus()
     {
         this.Status = true;
-        ChangeDate = DateTime.Now;
+        ChangeDate = DateTime.UtcNow;
     }
 
     private void ClearStatus()

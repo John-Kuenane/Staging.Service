@@ -1,4 +1,4 @@
-﻿namespace MISSA.Services.Staging.Domain.AggregatesModel.PackageAggregate;
+﻿namespace Staging.Domain.AggregatesModel.PackageAggregate;
 
 public class PackageEventDevice
     : Entity

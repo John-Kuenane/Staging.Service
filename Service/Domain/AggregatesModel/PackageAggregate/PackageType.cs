@@ -1,6 +1,6 @@
 ﻿using Staging.Domain.SeedWork;
 
-namespace MISSA.Services.Staging.Domain.AggregatesModel.PackageAggregate;
+namespace Staging.Domain.AggregatesModel.PackageAggregate;
 
 public class PackageType
         : Enumeration

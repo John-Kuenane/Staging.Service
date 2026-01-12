@@ -1,14 +1,11 @@
 ﻿using Staging.Domain.SeedWork;
 
-namespace MISSA.Services.Staging.Domain.AggregatesModel.PackageAggregate;
+namespace Staging.Domain.AggregatesModel.PackageAggregate;
 
 public class DataFlagType
         : Enumeration
 {
-    public static DataFlagType Custom = new DataFlagType(1, "Custom");
-    public static DataFlagType PMTCorrectionRequired = new DataFlagType(2, "PMT Correction Required");
-    public static DataFlagType PMTScreeningRequired = new DataFlagType(3, "PMT Screening Required");
-    public static DataFlagType NICRLookUpFailed = new DataFlagType(4, "NICR LookUp Failed");
+    public static DataFlagType DataQualityIssue = new DataFlagType(1, "Data Quality Issue");
     
 public DataFlagType(int id, string name)
         : base(id, name)
@@ -16,7 +13,7 @@ public DataFlagType(int id, string name)
     }
 
     public static IEnumerable<DataFlagType> List() =>
-        new[] { Custom, PMTCorrectionRequired, PMTScreeningRequired, NICRLookUpFailed };
+        new[] { DataQualityIssue };
 
     public static DataFlagType FromName(string name)
     {
