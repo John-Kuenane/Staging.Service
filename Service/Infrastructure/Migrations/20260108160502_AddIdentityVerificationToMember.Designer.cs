@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Staging.Infrastructure;
 
@@ -11,9 +12,11 @@ using Staging.Infrastructure;
 namespace Staging.Infrastructure.Migrations
 {
     [DbContext(typeof(DatabaseContext))]
-    partial class DatabaseContextModelSnapshot : ModelSnapshot
+    [Migration("20260108160502_AddIdentityVerificationToMember")]
+    partial class AddIdentityVerificationToMember
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -949,11 +952,6 @@ namespace Staging.Infrastructure.Migrations
                                 .IsRequired()
                                 .HasColumnType("nvarchar(max)");
 
-                            b1.Property<string>("RequestKey")
-                                .IsRequired()
-                                .HasMaxLength(200)
-                                .HasColumnType("nvarchar(200)");
-
                             b1.Property<string>("Status")
                                 .IsRequired()
                                 .HasMaxLength(20)
@@ -970,9 +968,6 @@ namespace Staging.Infrastructure.Migrations
                             b1.HasKey("Id");
 
                             b1.HasIndex("ExternalSubmissionId");
-
-                            b1.HasIndex("Vendor", "Type", "RequestKey")
-                                .IsUnique();
 
                             b1.ToTable("ExternalSubmissionItems", "staging");
 
@@ -1476,6 +1471,9 @@ namespace Staging.Infrastructure.Migrations
                                 .HasDefaultValue("Pending");
 
                             b1.HasKey("PackageEventHouseholdMemberId");
+
+                            b1.HasIndex("Status")
+                                .HasDatabaseName("IX_PackageEventHouseholdMember_IdentityVerificationStatus");
 
                             b1.ToTable("PackageEventHouseholdMember", "staging");
 

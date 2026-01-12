@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Staging.Infrastructure;
 
@@ -11,9 +12,11 @@ using Staging.Infrastructure;
 namespace Staging.Infrastructure.Migrations
 {
     [DbContext(typeof(DatabaseContext))]
-    partial class DatabaseContextModelSnapshot : ModelSnapshot
+    [Migration("20251224073554_AddSupportFieldsToDataFlag")]
+    partial class AddSupportFieldsToDataFlag
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -22,27 +25,6 @@ namespace Staging.Infrastructure.Migrations
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
-
-            modelBuilder.Entity("Staging.Domain.AggregatesModel.ExternalSubmissionAggregate.ExternalSubmissionAggregate", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<int?>("SourceId")
-                        .HasColumnType("int");
-
-                    b.Property<string>("SourceType")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("nvarchar(100)");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("ExternalSubmission", "staging");
-                });
 
             modelBuilder.Entity("Staging.Domain.AggregatesModel.FormAggregate.Form", b =>
                 {
@@ -403,10 +385,6 @@ namespace Staging.Infrastructure.Migrations
                         .HasMaxLength(10)
                         .HasColumnType("nvarchar(10)");
 
-                    b.Property<string>("Vendor")
-                        .HasMaxLength(20)
-                        .HasColumnType("nvarchar(20)");
-
                     b.HasKey("Id");
 
                     b.HasIndex("UniqueCode")
@@ -502,6 +480,12 @@ namespace Staging.Infrastructure.Migrations
                     b.Property<int?>("GroupId")
                         .HasColumnType("int");
 
+                    b.Property<Guid>("HouseholdId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("HouseholdMemberId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<DateTime?>("IssueDate")
                         .HasColumnType("datetime2");
 
@@ -510,9 +494,6 @@ namespace Staging.Infrastructure.Migrations
 
                     b.Property<Guid?>("LastModifiedId")
                         .HasColumnType("uniqueidentifier");
-
-                    b.Property<int>("PackageEventHouseholdId")
-                        .HasColumnType("int");
 
                     b.Property<int?>("PackageEventId")
                         .HasColumnType("int");
@@ -913,74 +894,6 @@ namespace Staging.Infrastructure.Migrations
                     b.HasIndex("PackageEventHouseholdSynchId");
 
                     b.ToTable("PackageEventHouseholdSynchMetaAttribute", "staging");
-                });
-
-            modelBuilder.Entity("Staging.Domain.AggregatesModel.ExternalSubmissionAggregate.ExternalSubmissionAggregate", b =>
-                {
-                    b.OwnsMany("Staging.Domain.AggregatesModel.ExternalSubmissionAggregate.ExternalSubmission", "Submissions", b1 =>
-                        {
-                            b1.Property<int>("Id")
-                                .ValueGeneratedOnAdd()
-                                .HasColumnType("int");
-
-                            SqlServerPropertyBuilderExtensions.UseIdentityColumn(b1.Property<int>("Id"));
-
-                            b1.Property<int>("AttemptCount")
-                                .HasColumnType("int");
-
-                            b1.Property<DateTime>("CreatedAt")
-                                .HasColumnType("datetime2");
-
-                            b1.Property<string>("ExternalId")
-                                .HasMaxLength(100)
-                                .HasColumnType("nvarchar(100)");
-
-                            b1.Property<int>("ExternalSubmissionId")
-                                .HasColumnType("int");
-
-                            b1.Property<DateTime?>("LastAttemptAt")
-                                .HasColumnType("datetime2");
-
-                            b1.Property<string>("Message")
-                                .HasMaxLength(2000)
-                                .HasColumnType("nvarchar(2000)");
-
-                            b1.Property<string>("Payload")
-                                .IsRequired()
-                                .HasColumnType("nvarchar(max)");
-
-                            b1.Property<string>("RequestKey")
-                                .IsRequired()
-                                .HasMaxLength(200)
-                                .HasColumnType("nvarchar(200)");
-
-                            b1.Property<string>("Status")
-                                .IsRequired()
-                                .HasMaxLength(20)
-                                .HasColumnType("nvarchar(20)");
-
-                            b1.Property<int>("Type")
-                                .HasColumnType("int");
-
-                            b1.Property<string>("Vendor")
-                                .IsRequired()
-                                .HasMaxLength(50)
-                                .HasColumnType("nvarchar(50)");
-
-                            b1.HasKey("Id");
-
-                            b1.HasIndex("ExternalSubmissionId");
-
-                            b1.HasIndex("Vendor", "Type", "RequestKey")
-                                .IsUnique();
-
-                            b1.ToTable("ExternalSubmissionItems", "staging");
-
-                            b1.WithOwner()
-                                .HasForeignKey("ExternalSubmissionId");
-                        });
-
-                    b.Navigation("Submissions");
                 });
 
             modelBuilder.Entity("Staging.Domain.AggregatesModel.FormAggregate.Form", b =>
@@ -1451,100 +1364,6 @@ namespace Staging.Infrastructure.Migrations
                         .WithMany("Members")
                         .HasForeignKey("PackageEventHouseholdId")
                         .OnDelete(DeleteBehavior.Cascade);
-
-                    b.OwnsOne("Staging.Domain.AggregatesModel.PackageAggregate.IdentityVerification", "IdentityVerification", b1 =>
-                        {
-                            b1.Property<int>("PackageEventHouseholdMemberId")
-                                .HasColumnType("int");
-
-                            b1.Property<string>("Message")
-                                .HasMaxLength(500)
-                                .HasColumnType("nvarchar(500)");
-
-                            b1.Property<DateTime?>("RecordedAt")
-                                .HasColumnType("datetime2");
-
-                            b1.Property<string>("Reference")
-                                .HasMaxLength(100)
-                                .HasColumnType("nvarchar(100)");
-
-                            b1.Property<string>("Status")
-                                .IsRequired()
-                                .ValueGeneratedOnAdd()
-                                .HasMaxLength(20)
-                                .HasColumnType("nvarchar(20)")
-                                .HasDefaultValue("Pending");
-
-                            b1.HasKey("PackageEventHouseholdMemberId");
-
-                            b1.ToTable("PackageEventHouseholdMember", "staging");
-
-                            b1.WithOwner()
-                                .HasForeignKey("PackageEventHouseholdMemberId");
-
-                            b1.OwnsOne("Staging.Domain.AggregatesModel.PackageAggregate.MemberIdentifier", "VerifiedIdentity", b2 =>
-                                {
-                                    b2.Property<int>("IdentityVerificationPackageEventHouseholdMemberId")
-                                        .HasColumnType("int");
-
-                                    b2.Property<DateTime?>("DateOfBirth")
-                                        .HasColumnType("datetime2");
-
-                                    b2.Property<string>("FirstName")
-                                        .HasMaxLength(100)
-                                        .HasColumnType("nvarchar(100)");
-
-                                    b2.Property<string>("IdentificationNumber")
-                                        .HasMaxLength(50)
-                                        .HasColumnType("nvarchar(50)");
-
-                                    b2.Property<string>("Surname")
-                                        .HasMaxLength(100)
-                                        .HasColumnType("nvarchar(100)");
-
-                                    b2.HasKey("IdentityVerificationPackageEventHouseholdMemberId");
-
-                                    b2.ToTable("PackageEventHouseholdMember", "staging");
-
-                                    b2.WithOwner()
-                                        .HasForeignKey("IdentityVerificationPackageEventHouseholdMemberId");
-                                });
-
-                            b1.Navigation("VerifiedIdentity");
-                        });
-
-                    b.OwnsOne("Staging.Domain.AggregatesModel.PackageAggregate.MemberIdentifier", "EnumeratedIdentity", b1 =>
-                        {
-                            b1.Property<int>("PackageEventHouseholdMemberId")
-                                .HasColumnType("int");
-
-                            b1.Property<DateTime?>("DateOfBirth")
-                                .HasColumnType("datetime2");
-
-                            b1.Property<string>("FirstName")
-                                .HasMaxLength(100)
-                                .HasColumnType("nvarchar(100)");
-
-                            b1.Property<string>("IdentificationNumber")
-                                .HasMaxLength(50)
-                                .HasColumnType("nvarchar(50)");
-
-                            b1.Property<string>("Surname")
-                                .HasMaxLength(100)
-                                .HasColumnType("nvarchar(100)");
-
-                            b1.HasKey("PackageEventHouseholdMemberId");
-
-                            b1.ToTable("PackageEventHouseholdMember", "staging");
-
-                            b1.WithOwner()
-                                .HasForeignKey("PackageEventHouseholdMemberId");
-                        });
-
-                    b.Navigation("EnumeratedIdentity");
-
-                    b.Navigation("IdentityVerification")
-                        .IsRequired();
                 });
 
             modelBuilder.Entity("Staging.Domain.AggregatesModel.PackageAggregate.PackageEventHouseholdMemberAttribute", b =>
