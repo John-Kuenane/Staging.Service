@@ -1,7 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore.Metadata.Builders;
-using MISSA.Services.Staging.Domain.AggregatesModel.PackageAggregate;
+using Staging.Domain.AggregatesModel.PackageAggregate;
 
-namespace MISSA.Services.Staging.Infrastructure;
+namespace Staging.Infrastructure;
 
 class PackageEventDataFlagEntityTypeConfiguration : IEntityTypeConfiguration<PackageEventDataFlag>
 {
@@ -21,7 +21,7 @@ class PackageEventDataFlagEntityTypeConfiguration : IEntityTypeConfiguration<Pac
             .Property<Guid?>("LastModifiedId");
 
         configuration
-            .Property(c => c.HouseholdId)
+            .Property(c => c.PackageEventHouseholdId)
             .IsRequired();
 
         configuration
@@ -41,9 +41,24 @@ class PackageEventDataFlagEntityTypeConfiguration : IEntityTypeConfiguration<Pac
             });
 
         configuration
+            .OwnsOne(o => o.Requester, a =>
+            {
+                a.WithOwner();
+            });
+
+        configuration
+            .Property(c => c.Subject)
+            .IsRequired()
+            .HasMaxLength(100);
+
+        configuration
             .Property(c => c.Description)
             .IsRequired()
-            .HasMaxLength(500);
+            .HasMaxLength(750);
+
+        configuration
+            .Property(c => c.PriorityId)
+            .IsRequired();
 
         configuration.HasMany(b => b.Comments)
            .WithOne()

@@ -1,7 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore.Metadata.Builders;
-using MISSA.Services.Staging.Domain.AggregatesModel.PackageAggregate;
+using Staging.Domain.AggregatesModel.PackageAggregate;
 
-namespace MISSA.Services.Staging.Infrastructure;
+namespace Staging.Infrastructure;
 
 class PackageEventDataFlagCommentEntityTypeConfiguration : IEntityTypeConfiguration<PackageEventDataFlagComment>
 {

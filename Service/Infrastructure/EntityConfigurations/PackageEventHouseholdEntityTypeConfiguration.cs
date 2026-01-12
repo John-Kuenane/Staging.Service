@@ -1,7 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore.Metadata.Builders;
-using MISSA.Services.Staging.Domain.AggregatesModel.PackageAggregate;
+using Staging.Domain.AggregatesModel.PackageAggregate;
 
-namespace MISSA.Services.Staging.Infrastructure;
+namespace Staging.Infrastructure;
 
 class PackageEventHouseholdEntityTypeConfiguration : IEntityTypeConfiguration<PackageEventHousehold>
 {
@@ -25,9 +25,13 @@ class PackageEventHouseholdEntityTypeConfiguration : IEntityTypeConfiguration<Pa
             .IsRequired();
 
         configuration
-            .Property(c => c.Village)
+            .Property(c => c.HouseholdGuid)
+            .IsRequired();
+
+        configuration
+            .Property(c => c.CommunityClassification)
             .IsRequired()
-            .HasMaxLength(150);
+            .HasMaxLength(30);
 
         configuration
             .Property(c => c.HouseholdHead)
@@ -39,14 +43,21 @@ class PackageEventHouseholdEntityTypeConfiguration : IEntityTypeConfiguration<Pa
             .HasMaxLength(25);
 
         configuration
-            .Property(c => c.Address)
+            .Property(c => c.PhysicalAddress)
             .HasMaxLength(250);
 
         configuration
-            .OwnsOne(o => o.Enumerated, a =>
-            {
-                a.WithOwner();
-            });
+            .Property(c => c.VillageName)
+            .IsRequired()
+            .HasMaxLength(150);
+
+        configuration
+            .Property(c => c.ListingStatusId)
+            .IsRequired();
+
+        configuration
+            .Property(c => c.CollectionStatusId)
+            .IsRequired();
 
         configuration
             .OwnsOne(o => o.Accepted, a =>

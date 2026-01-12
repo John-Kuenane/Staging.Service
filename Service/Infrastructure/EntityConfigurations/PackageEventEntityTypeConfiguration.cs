@@ -1,7 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore.Metadata.Builders;
-using MISSA.Services.Staging.Domain.AggregatesModel.PackageAggregate;
+using Staging.Domain.AggregatesModel.PackageAggregate;
 
-namespace MISSA.Services.Staging.Infrastructure;
+namespace Staging.Infrastructure;
 
 class PackageEventEntityTypeConfiguration : IEntityTypeConfiguration<PackageEvent>
 {
@@ -21,38 +21,17 @@ class PackageEventEntityTypeConfiguration : IEntityTypeConfiguration<PackageEven
             .Property<Guid?>("LastModifiedId");
 
         configuration
-            .OwnsOne(o => o.EventOpened, a =>
-            {
-                a.WithOwner();
-            });
-
-        configuration
-            .OwnsOne(o => o.DeviceRegisteredStageClosed, a =>
-            {
-                a.WithOwner();
-            });
-
-        configuration
-            .OwnsOne(o => o.DataManagementStageClosed, a =>
-            {
-                a.WithOwner();
-            });
-
-        configuration
-            .OwnsOne(o => o.DataAcceptanceStageClosed, a =>
-            {
-                a.WithOwner();
-            });
-
-        configuration
-            .OwnsOne(o => o.GatewayStageClosed, a =>
-            {
-                a.WithOwner();
-            });
+            .Property(c => c.PackageStatusId)
+            .IsRequired();
 
         configuration
             .Property(c => c.OrgUnitId)
             .IsRequired();
+
+        configuration
+            .Property(c => c.OrgUnitName)
+            .IsRequired()
+            .HasMaxLength(100);
 
         configuration.HasMany(b => b.Devices)
            .WithOne()

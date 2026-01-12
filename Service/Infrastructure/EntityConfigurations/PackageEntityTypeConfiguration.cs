@@ -1,7 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore.Metadata.Builders;
-using MISSA.Services.Staging.Domain.AggregatesModel.PackageAggregate;
+using Staging.Domain.AggregatesModel.PackageAggregate;
 
-namespace MISSA.Services.Staging.Infrastructure;
+namespace Staging.Infrastructure;
 
 class PackageEntityTypeConfiguration : IEntityTypeConfiguration<Package>
 {
@@ -41,6 +41,11 @@ class PackageEntityTypeConfiguration : IEntityTypeConfiguration<Package>
             .IsRequired();
 
         configuration
+            .Property(c => c.ParentOrgunitName)
+            .IsRequired()
+            .HasMaxLength(500);
+
+        configuration
             .Property(c => c.UniqueCode)
             .IsRequired()
             .HasMaxLength(10);
@@ -48,6 +53,10 @@ class PackageEntityTypeConfiguration : IEntityTypeConfiguration<Package>
         configuration
             .Property(c => c.Description)
             .HasMaxLength(500);
+
+        configuration
+            .Property(c => c.Vendor)
+            .HasMaxLength(20);
 
         configuration.HasIndex("UniqueCode")
             .IsUnique(true);

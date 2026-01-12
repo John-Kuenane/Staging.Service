@@ -1,7 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore.Metadata.Builders;
-using MISSA.Services.Staging.Domain.AggregatesModel.PackageAggregate;
+using Staging.Domain.AggregatesModel.PackageAggregate;
 
-namespace MISSA.Services.Staging.Infrastructure;
+namespace Staging.Infrastructure;
 
 class PackageEventHouseholdSynchEntityTypeConfiguration : IEntityTypeConfiguration<PackageEventHouseholdSynch>
 {
@@ -24,6 +24,10 @@ class PackageEventHouseholdSynchEntityTypeConfiguration : IEntityTypeConfigurati
             .Property(c => c.DeviceId)
             .IsRequired()
             .HasMaxLength(10);
+
+        configuration
+            .Property(c => c.PayloadProcessedId)
+            .IsRequired();
 
         configuration.HasMany(b => b.MetaAttributes)
            .WithOne()
