@@ -61,6 +61,8 @@ public record PackageEventHouseholdSynchForManagementDto
     public string DeviceId { get; set; }
     public string Created { get; set; }
     public string Payload { get; set; }
+    public string ProcessedStatus { get; set; }
+    public string ProcessedDate { get; set; }
 }
 
 public record DataFlagForListDto

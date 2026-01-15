@@ -11,6 +11,10 @@ public interface IPackageQueries
 
     Task<DataFlagForDetailDto> GetPackageEventDataFlagAsync(int packageEventDataFlagId);
 
+    Task<PackageEventHouseholdSynchForManagementDto> GetLatestSynchForHouseholdAsync(
+        int packageEventId,
+        int packageEventHouseholdId);
+
     Task<IEnumerable<PackageForManagementDto>> GetPackagesForManagementAsync();
 
     Task<IEnumerable<PackageDto>> GetCollectionPackagesForDeviceAsync(string deviceId);

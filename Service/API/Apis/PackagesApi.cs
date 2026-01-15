@@ -30,6 +30,7 @@ public static class PackagesApi
         api.MapPut("{packageId:int}/events/{packageEventId:int}/change-status-gateway", ChangeStatusToGatewayAsync);
 
         api.MapGet("{packageId:int}/events/{packageEventId:int}/households/{packageEventHouseholdId:int}/data-flags", GetHouseholdDataFlagsAsync);
+        api.MapGet("{packageId:int}/events/{packageEventId:int}/households/{packageEventHouseholdId:int}/latest-synch", GetLatestSynchForHouseholdAsync);
         api.MapPost("{packageId:int}/events/{packageEventId:int}/households/{packageEventHouseholdId:int}/data-flag-add", AddDataFlagAsync);
         api.MapPut("{packageId:int}/events/{packageEventId:int}/households/{packageEventHouseholdId:int}/change-status-accepted", ChangeHouseholdStatusToAcceptedAsync);
         api.MapPut("{packageId:int}/events/{packageEventId:int}/households/{packageEventHouseholdId:int}/change-status-rejected", ChangeHouseholdStatusToRejectedAsync);
@@ -53,6 +54,12 @@ public static class PackagesApi
     {
         var dataFlag = await services.Queries.GetPackageEventDataFlagAsync(packageEventDataFlagId);
         return TypedResults.Ok(dataFlag);
+    }
+
+    public static async Task<Ok<PackageEventHouseholdSynchForManagementDto>> GetLatestSynchForHouseholdAsync(int packageId, int packageEventId, int packageEventHouseholdId, [AsParameters] PackageServices services)
+    {
+        var synch = await services.Queries.GetLatestSynchForHouseholdAsync(packageEventId, packageEventHouseholdId);
+        return TypedResults.Ok(synch);
     }
 
     public static async Task<Ok<IEnumerable<PackageForManagementDto>>> GetPackagesForManagementAsync([AsParameters] PackageServices services)

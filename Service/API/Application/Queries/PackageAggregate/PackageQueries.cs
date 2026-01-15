@@ -105,6 +105,39 @@ public class PackageQueries
         return await connection.QuerySingleAsync<DataFlagForDetailDto>(sql);
     }
 
+    public async Task<PackageEventHouseholdSynchForManagementDto> GetLatestSynchForHouseholdAsync(
+        int packageEventId,
+        int packageEventHouseholdId)
+    {
+        using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        var sql = $@"
+        SELECT	
+        TOP 1 
+        syn.Id,
+		syn.DeviceId,
+		FORMAT (syn.Created, 'yyyy-MM-dd hh:mm tt') AS Created,
+		syn.Payload,
+		CASE 
+			WHEN syn.PayloadProcessedId = 1 THEN 'Not Processed'
+			WHEN syn.PayloadProcessedId = 2 THEN 'Processed'
+			WHEN syn.PayloadProcessedId = 3 THEN 'Failed'
+			WHEN syn.PayloadProcessedId = 4 THEN 'Pending'
+			WHEN syn.PayloadProcessedId = 5 THEN 'Processing'
+		END AS ProcessedStatus,
+		FORMAT (syn.PayloadProcessedDate, 'yyyy-MM-dd hh:mm tt') AS ProcessedDate
+        FROM [staging].[PackageEventHousehold] hh
+        INNER JOIN [staging].[PackageEventHouseholdSynch] syn ON hh.Id = syn.PackageEventHouseholdId
+        WHERE hh.PackageEventId = {packageEventId} 
+	    AND hh.Id = {packageEventHouseholdId}
+        ORDER BY syn.PayloadProcessedDate DESC";
+
+        var packageEventHouseholdSynch = await connection.QuerySingleAsync<PackageEventHouseholdSynchForManagementDto>(sql);
+
+        return packageEventHouseholdSynch;
+    }
+
     public async Task<IEnumerable<PackageForManagementDto>> GetPackagesForManagementAsync()
     {
         using (var connection = new SqlConnection(_connectionString))
