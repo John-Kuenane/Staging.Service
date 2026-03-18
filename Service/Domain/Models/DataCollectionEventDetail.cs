@@ -15,6 +15,7 @@ public class DataCollectionEventMember
 {
     public List<DataCollectionEventDetailAttribute> HouseholdMemberAttributes { get; set; }
     public int Id { get; set; }
+    public int HouseholdMemberId { get; set; }
     public string HouseholdMemberGuid { get; set; }
     public string Name { get; set; }
     public string Surname { get; set; }

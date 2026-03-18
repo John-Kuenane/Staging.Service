@@ -13,11 +13,11 @@ public class DataCollectionEventProcessor
     : PayloadProcessor<DataCollectionEventPayloadActivity>
 {
     private readonly IPackageRepository _packageRepository;
-    private readonly ILogger<DataListingEventProcessor> _logger;
+    private readonly ILogger<DataCollectionEventProcessor> _logger;
 
     public DataCollectionEventProcessor(
         IPackageRepository packageRepository,
-        ILogger<DataListingEventProcessor> logger)
+        ILogger<DataCollectionEventProcessor> logger)
     {
         _packageRepository = packageRepository ?? throw new ArgumentNullException(nameof(packageRepository));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -46,6 +46,11 @@ public class DataCollectionEventProcessor
         activity.MarkAsInProgress();
 
         var deserialisedPayload = JsonConvert.DeserializeObject<DataCollectionEventDetail>(activity.PackageEventHouseholdSynch.Payload);
+        if (deserialisedPayload == null)
+        {
+            activity.MarkAsBlocked("Unable to deserialise payload");
+            return ExecutionResult.Failed(activity.ActivityType, "Unable to deserialise payload.");
+        }
 
         try
         {
@@ -60,6 +65,8 @@ public class DataCollectionEventProcessor
         }
             catch (Exception ex)
         {
+            _logger.LogError(ex, "Error processing DataCollectionEvent for HouseholdId {HouseholdId}", activity.PackageEventHousehold.Id);
+
             activity.MarkAsBlocked(ex.Message);
 
             return ExecutionResult.Failed(activity.ActivityType, $"{ex}: processing payload with ID: {activity.PackageEventHousehold.Id}");
@@ -83,30 +90,41 @@ public class DataCollectionEventProcessor
     private void ProcessMemberStatusChange(PackageEventHousehold packageEventHousehold, DataCollectionEventDetail deserialisedPayload)
     {
         var membersToRemove = deserialisedPayload.Members.Where(hm => hm.StatusDetails?.Status == "Removed");
+
         foreach (var memberToRemove in membersToRemove)
         {
-            var householdMemberGuid = Guid.Parse(memberToRemove.HouseholdMemberGuid);
-            var currentHouseholdMember = packageEventHousehold.Members.SingleOrDefault(hm => hm.HouseholdMemberGuid == householdMemberGuid);
+            var currentHouseholdMember = ResolveExistingMember(packageEventHousehold, memberToRemove);
+
             if (currentHouseholdMember == null)
             {
-                throw new KeyNotFoundException($"Unable to locate household member {memberToRemove.HouseholdMemberGuid} for marking as not current");
+                throw new KeyNotFoundException(
+                    $"Unable to locate household member for marking as not current. " +
+                    $"HouseholdMemberId: {memberToRemove.HouseholdMemberId}, " +
+                    $"HouseholdMemberGuid: {memberToRemove.HouseholdMemberGuid}");
             }
+
             currentHouseholdMember.SetToRemoved(memberToRemove.StatusDetails.RemovedReason);
         }
     }
 
     private void ProcessHouseholdMemberChanges(PackageEventHousehold packageEventHousehold, DataCollectionEventDetail deserialisedPayload)
     {
-        foreach (var memberToUpdate in deserialisedPayload.Members.Where(hm => hm.HouseholdMemberGuid != "NEWGUID"))
+        foreach (var memberToUpdate in (deserialisedPayload.Members ?? new List<DataCollectionEventMember>())
+            .Where(hm => hm.HouseholdMemberGuid != "NEWGUID"
+                      && hm.StatusDetails?.Status != "Removed"))
         {
-            var householdMemberGuid = Guid.Parse(memberToUpdate.HouseholdMemberGuid);
-            var currentHouseholdMember = packageEventHousehold.Members.SingleOrDefault(hm => hm.HouseholdMemberGuid == householdMemberGuid);
+            var currentHouseholdMember = ResolveExistingMember(packageEventHousehold, memberToUpdate);
+
             if (currentHouseholdMember == null)
             {
-                throw new KeyNotFoundException($"Unable to locate household member {memberToUpdate.HouseholdMemberGuid} for marking as not current");
+                throw new KeyNotFoundException(
+                    $"Unable to locate household member for update. " +
+                    $"HouseholdMemberId: {memberToUpdate.HouseholdMemberId}, " +
+                    $"HouseholdMemberGuid: {memberToUpdate.HouseholdMemberGuid}");
             }
 
-            var changeAttributeList = memberToUpdate.HouseholdMemberAttributes.Where(ha => ha.ValueState == "Dirty");
+            var changeAttributeList = (memberToUpdate.HouseholdMemberAttributes ?? new List<DataCollectionEventDetailAttribute>())
+                .Where(ha => ha.ValueState == "Dirty");
             foreach (var changeAttribute in changeAttributeList)
             {
                 currentHouseholdMember.SetAttributeValue(changeAttribute.Key, changeAttribute.NewValue);
@@ -155,5 +173,44 @@ public class DataCollectionEventProcessor
         //{
         //    throw new DomainException($"Date of birth not specified for new member");
         //}
+    }
+
+    // Historic remediation support:
+    // Some previously synchronised members contain Guid.Empty due to legacy data issues.
+    // In these cases, HouseholdMemberId is used as the primary identifier instead of GUID.
+    private PackageEventHouseholdMember ResolveExistingMember(
+        PackageEventHousehold packageEventHousehold,
+        DataCollectionEventMember member)
+    {
+        var householdMemberId = member.HouseholdMemberId;
+
+        if (householdMemberId <= 0)
+        {
+            throw new InvalidOperationException(
+                $"Invalid HouseholdMemberId '{householdMemberId}' in sync payload.");
+        }
+
+        var hasParsedGuid = Guid.TryParse(member.HouseholdMemberGuid, out var householdMemberGuid);
+        var hasUsableGuid = hasParsedGuid && householdMemberGuid != Guid.Empty;
+
+        var byId = packageEventHousehold.Members
+            .SingleOrDefault(hm => hm.HouseholdMemberId == householdMemberId);
+
+        if (hasUsableGuid)
+        {
+            var byGuid = packageEventHousehold.Members
+                .SingleOrDefault(hm => hm.HouseholdMemberGuid == householdMemberGuid);
+
+            if (byGuid != null && byId != null && byGuid.HouseholdMemberId != byId.HouseholdMemberId)
+            {
+                throw new InvalidOperationException(
+                    $"Payload member identity mismatch. HouseholdMemberId {householdMemberId} " +
+                    $"does not match HouseholdMemberGuid {householdMemberGuid}.");
+            }
+
+            return byGuid ?? byId;
+        }
+
+        return byId;
     }
 }
