@@ -18,5 +18,9 @@ public interface IPackageEventHouseholdRepository : IRepository<PackageEventHous
 
     Task<int> CountStuckSynchronisationsAsync(TimeSpan threshold, CancellationToken cancellationToken);
 
+    Task<int> CountFailedSynchronisationsAsync(CancellationToken cancellationToken);
+
+    Task<int> CountRecentFailedSynchronisationsAsync(TimeSpan window, CancellationToken cancellationToken);
+
     void Update(PackageEventHousehold packageEventHousehold);
 }

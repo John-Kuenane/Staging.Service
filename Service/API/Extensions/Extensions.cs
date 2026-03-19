@@ -199,6 +199,7 @@ internal static class Extensions
             .AddCheck<SyncQueueHealthCheck>("sync_queue")
             .AddCheck<SyncWorkerHealthCheck>("sync_workers")
             .AddCheck<SyncProcessingHealthCheck>("sync_processing")
+            .AddCheck<SyncFailureHealthCheck>("sync_failures")
             .AddCheck<ExternalSubmissionQueueHealthCheck>("external_submission_queue")
             .AddCheck<ExternalSubmissionWorkerHealthCheck>("external_submission_workers")
             .AddCheck<ExternalSubmissionProcessingHealthCheck>("external_submission_processing");

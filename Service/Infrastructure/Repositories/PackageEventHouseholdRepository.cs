@@ -143,4 +143,29 @@ public class PackageEventHouseholdRepository
                         x.PayloadStatusDate < cutoff)
             .CountAsync(cancellationToken);
     }
+
+    /// <summary>
+    /// Counts synchronisation records currently in Failed state.
+    /// </summary>
+    public async Task<int> CountFailedSynchronisationsAsync(CancellationToken cancellationToken)
+    {
+        return await _context.Set<PackageEventHouseholdSynch>()
+            .Where(x => x.PayloadProcessedId == PayloadProcessedStatus.Failed.Id)
+            .CountAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Counts recent failed synchronisations within a given time window.
+    /// </summary>
+    public async Task<int> CountRecentFailedSynchronisationsAsync(
+        TimeSpan window,
+        CancellationToken cancellationToken)
+    {
+        var cutoff = DateTime.UtcNow - window;
+
+        return await _context.Set<PackageEventHouseholdSynch>()
+            .Where(x => x.PayloadProcessedId == PayloadProcessedStatus.Failed.Id &&
+                        x.PayloadStatusDate >= cutoff)
+            .CountAsync(cancellationToken);
+    }
 }
