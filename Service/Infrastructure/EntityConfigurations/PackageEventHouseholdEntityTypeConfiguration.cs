@@ -75,6 +75,11 @@ class PackageEventHouseholdEntityTypeConfiguration : IEntityTypeConfiguration<Pa
             .Property(c => c.Comments)
             .HasMaxLength(500);
 
+        //configuration
+        //    .HasIndex(c => c.HouseholdId)
+        //    .IsUnique()
+        //    .HasDatabaseName("UX_PackageEventHousehold_HouseholdId");
+
         configuration.HasMany(b => b.Members)
            .WithOne()
            .HasForeignKey("PackageEventHouseholdId")

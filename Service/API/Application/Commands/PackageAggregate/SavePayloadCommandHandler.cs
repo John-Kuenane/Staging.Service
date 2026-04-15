@@ -1,5 +1,6 @@
 ﻿using Staging.API.Application.Queries.PackageAggregate;
 using Staging.Domain.AggregatesModel.PackageAggregate;
+using Staging.Domain.Services;
 
 namespace Staging.API.Application.Commands.PackageAggregate;
 
@@ -11,18 +12,21 @@ public class SavePayloadCommandHandler : IRequestHandler<SavePayloadCommand, Com
     private readonly IPackageEventHouseholdRepository _packageEventHouseholdRepository;
     private readonly IPackageQueries _packageQueries;
     private readonly ILogger<SavePayloadCommandHandler> _logger;
+    private readonly IHouseholdIdAllocator _householdIdAllocator;
 
     public SavePayloadCommandHandler(
         IPackageRepository packageRepository,
         IPackageEventRepository packageEventRepository,
         IPackageEventHouseholdRepository packageEventHouseholdRepository,
         IPackageQueries packageQueries,
+        IHouseholdIdAllocator householdIdAllocator,
         ILogger<SavePayloadCommandHandler> logger)
     {
         _packageRepository = packageRepository ?? throw new ArgumentNullException(nameof(packageRepository));
         _packageEventRepository = packageEventRepository ?? throw new ArgumentNullException(nameof(packageEventRepository));
         _packageEventHouseholdRepository = packageEventHouseholdRepository ?? throw new ArgumentNullException(nameof(packageEventHouseholdRepository));
         _packageQueries = packageQueries ?? throw new ArgumentNullException(nameof(packageQueries));
+        _householdIdAllocator = householdIdAllocator ?? throw new ArgumentNullException(nameof(householdIdAllocator));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -42,7 +46,10 @@ public class SavePayloadCommandHandler : IRequestHandler<SavePayloadCommand, Com
             var packageEvent = await _packageEventRepository.GetWithNoChildrenAsync(command.PackageEventId);
             if (packageEvent == null)
             {
-                var returnNewId = HandleMissingPackageEventForNewHousehold(packageToUpdate, command.HouseholdId, command.Payload, ref packageEvent);
+                var returnNewId = await HandleMissingPackageEventForNewHousehold(
+                    packageToUpdate,
+                    command.Payload,
+                    cancellationToken);
                 await _packageRepository.UnitOfWork.SaveEntitiesAsync(cancellationToken);
 
                 return new CommandResponseDto() { Status = true, StatusMessage = "", RecordId = returnNewId };
@@ -52,7 +59,10 @@ public class SavePayloadCommandHandler : IRequestHandler<SavePayloadCommand, Com
                 PackageEventHousehold packageEventHousehold = null;
                 if (command.HouseholdId == 0)
                 {
-                    var returnNewId = HandleNewHouseholdForCollection(command.HouseholdId, command.Payload, packageEvent);
+                    var returnNewId = await HandleNewHouseholdForCollection(
+                        command.Payload,
+                        packageEvent,
+                        cancellationToken);
                     await _packageRepository.UnitOfWork.SaveEntitiesAsync(cancellationToken);
 
                     return new CommandResponseDto() { Status = true, StatusMessage = "", RecordId = returnNewId };
@@ -81,20 +91,34 @@ public class SavePayloadCommandHandler : IRequestHandler<SavePayloadCommand, Com
         }
     }
 
-    private int HandleMissingPackageEventForNewHousehold(Package package, int householdId, string payload, ref PackageEvent packageEvent)
+    private async Task<int> HandleMissingPackageEventForNewHousehold(
+        Package package,
+        string payload,
+        CancellationToken cancellationToken)
     {
-        packageEvent = package.Events.FirstOrDefault();
+        var packageEvent = package.Events.FirstOrDefault();
+        if (packageEvent == null)
+        {
+            throw new InvalidOperationException("Unable to locate package event for new listing household.");
+        }
 
-        var packageEventHousehold = packageEvent.AddNewListingHousehold("DVC-001", payload);
-        var synch = packageEventHousehold.AddSynchronisation("DVC-001", payload);
+        var newHouseholdId = await _householdIdAllocator.GetNextHouseholdIdAsync(cancellationToken);
+
+        var packageEventHousehold = packageEvent.AddNewListingHousehold(newHouseholdId, payload);
+        packageEventHousehold.AddSynchronisation("DVC-001", payload);
 
         return packageEventHousehold.HouseholdId;
     }
 
-    private int HandleNewHouseholdForCollection(int householdId, string payload, PackageEvent packageEvent)
+    private async Task<int> HandleNewHouseholdForCollection(
+        string payload,
+        PackageEvent packageEvent,
+        CancellationToken cancellationToken)
     {
-        var newPackageEventHousehold = packageEvent.AddNewCollectionHousehold("DVC-001", payload);
-        var newSynch = newPackageEventHousehold.AddSynchronisation("DVC-001", payload);
+        var newHouseholdId = await _householdIdAllocator.GetNextHouseholdIdAsync(cancellationToken);
+
+        var newPackageEventHousehold = packageEvent.AddNewCollectionHousehold(newHouseholdId, payload);
+        newPackageEventHousehold.AddSynchronisation("DVC-001", payload);
 
         return newPackageEventHousehold.HouseholdId;
     }

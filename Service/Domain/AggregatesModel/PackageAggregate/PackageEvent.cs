@@ -22,8 +22,6 @@ public class PackageEvent
     public Guid OrgUnitId { get; private set; }
     public string OrgUnitName { get; private set; }
 
-    public int? LastTemporaryHouseholdId { get; private set; }
-
     private List<PackageEventDevice> _devices;
     public IEnumerable<PackageEventDevice> Devices => _devices.AsReadOnly();
 
@@ -46,21 +44,14 @@ public class PackageEvent
 
         OrgUnitId = orgUnitId;
         OrgUnitName = orgUnitName;
-
-        LastTemporaryHouseholdId = 0;
     }
 
-    public PackageEventHousehold AddNewListingHousehold(string deviceId, string payload)
+    public PackageEventHousehold AddNewListingHousehold(int householdId, string payload)
     {
         var deserialisedPayload = JsonConvert.DeserializeObject<DataListingEventDetail>(payload);
 
-        if(LastTemporaryHouseholdId.HasValue)
-            LastTemporaryHouseholdId += 1;
-        else
-            LastTemporaryHouseholdId = 800000 + (Id * 100);
-
         var newHousehold = new PackageEventHousehold(
-            householdId: LastTemporaryHouseholdId.Value,
+            householdId: householdId,
             householdGuid: Guid.NewGuid(),
             communityClassification: deserialisedPayload.newCommunityClassification,
             householdHead: deserialisedPayload.householdHead,
@@ -68,24 +59,19 @@ public class PackageEvent
             physicalAddress: deserialisedPayload.postalAddress,
             villageName: deserialisedPayload.villageName
         );
-        
+
         newHousehold.SetToNewHousehold();
         _households.Add(newHousehold);
 
         return newHousehold;
     }
 
-    public PackageEventHousehold AddNewCollectionHousehold(string deviceId, string payload)
+    public PackageEventHousehold AddNewCollectionHousehold(int householdId, string payload)
     {
         var deserialisedPayload = JsonConvert.DeserializeObject<DataListingEventDetail>(payload);
 
-        if (LastTemporaryHouseholdId.HasValue)
-            LastTemporaryHouseholdId += 1;
-        else
-            LastTemporaryHouseholdId = 800000 + (Id * 100);
-
         var newHousehold = new PackageEventHousehold(
-            householdId: LastTemporaryHouseholdId.Value,
+            householdId: householdId,
             householdGuid: Guid.NewGuid(),
             communityClassification: "UNIDENTIFIED",
             householdHead: deserialisedPayload.householdHead,
@@ -93,6 +79,7 @@ public class PackageEvent
             physicalAddress: deserialisedPayload.postalAddress,
             villageName: deserialisedPayload.villageName
         );
+
         newHousehold.SetToNewHousehold();
         newHousehold.SetCollectionToEnumerated();
 
@@ -180,7 +167,7 @@ public class PackageEvent
         {
             throw new InvalidOperationException($"Household with ID {packageEventHouseholdId} not found.");
         }
-        packageEventHousehod.SetStatusToAccepted();
+        packageEventHousehod.SetStatusToRejected();
     }
 
     private void AddPayloadSynchronisedDomainEvent(PackageEventHousehold packageEventHousehold, PackageEventHouseholdSynch packageEventHouseholdSynch)

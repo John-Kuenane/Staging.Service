@@ -151,6 +151,7 @@ internal static class Extensions
         services.AddScoped<IPackageEventRepository, PackageEventRepository>();
         services.AddScoped<IPackageEventHouseholdRepository, PackageEventHouseholdRepository>();
         services.AddScoped<IExternalSubmissionRepository, ExternalSubmissionRepository>();
+        services.AddScoped<IHouseholdIdAllocator, HouseholdIdAllocator>();
 
         services.AddScoped<IPackageQueries>(sp =>
             new PackageQueries(builder.Configuration["ConnectionStrings:StagingDbContext"]));
