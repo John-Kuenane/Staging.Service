@@ -112,19 +112,12 @@ public class PackageEventHouseholdRepository
     /// </remarks>
     public async Task ResetProcessingToPendingAsync(CancellationToken cancellationToken)
     {
-        // Fetch all synchronisations currently in "Processing" state
-        var stuckItems = await _context.Set<PackageEventHouseholdSynch>()
+        await _context.Set<PackageEventHouseholdSynch>()
             .Where(s => s.PayloadProcessedId == PayloadProcessedStatus.Processing.Id)
-            .ToListAsync(cancellationToken);
-
-        if (!stuckItems.Any()) return;
-
-        foreach (var item in stuckItems)
-        {
-            item.SetToPending();
-        }
-
-        await _context.SaveChangesAsync(cancellationToken);
+            .ExecuteUpdateAsync(s => s.SetProperty(
+                x => x.PayloadProcessedId,
+                PayloadProcessedStatus.Pending.Id),
+                cancellationToken);
     }
 
     /// <summary>

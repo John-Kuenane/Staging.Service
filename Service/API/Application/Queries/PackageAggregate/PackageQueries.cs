@@ -48,7 +48,7 @@ public class PackageQueries
 
             if(package.FormId.HasValue)
             {
-                var form = await PreparePackageFormAsync(package.FormId.Value, connection);
+                var form = await LoadFormAsync(package.FormId.Value, connection);
                 package.Forms.Add(form);
             }
 
@@ -144,26 +144,43 @@ public class PackageQueries
         {
             connection.Open();
 
-            var sql = $@"
-					SELECT	pac.Id,
-							CASE 
-								WHEN pac.PackageTypeId = 1 THEN 'Data Listing' 
-								WHEN pac.PackageTypeId = 2 THEN 'Data Collection' 
-								WHEN pac.PackageTypeId = 3 THEN 'Enrollment' 
-								WHEN pac.PackageTypeId = 4 THEN 'Digital Payment Enrollment' 
-								WHEN pac.PackageTypeId = 5 THEN 'Community Validation' 
-							END AS 'PackageType',
-							pac.OrgUnitId,
-							pac.ParentOrgUnitName,
-							pac.UniqueCode,
-							pac.[Description],
-							FORMAT (pac.Created, 'yyyy-MM-dd hh:mm tt') AS Created,
-			                (SELECT COUNT(*) FROM staging.PackageEvent evt INNER JOIN staging.PackageEventHousehold hh ON evt.Id = hh.PackageEventId WHERE evt.PackageId = pac.Id) AS NumberHouseholds,
-			                (SELECT COUNT(*) FROM staging.PackageEvent evt INNER JOIN staging.PackageEventHousehold hh ON evt.Id = hh.PackageEventId WHERE evt.PackageId = pac.Id AND hh.CollectionStatusId = 2) AS NumberEnumerations,
-			                (SELECT COUNT(*) FROM staging.PackageEvent evt INNER JOIN staging.PackageEventDataFlag flag ON evt.Id = flag.PackageEventId WHERE evt.PackageId = pac.Id) AS NumberDataFlags,
-			                0 AS NumberCompletedSubPackages,
-                            pac.FormId
-					FROM [staging].[Package] pac";
+            const string sql = @"
+                WITH HouseholdCounts AS (
+                    SELECT evt.PackageId,
+                           COUNT(hh.Id)                                                    AS NumberHouseholds,
+                           SUM(CASE WHEN hh.CollectionStatusId = 2 THEN 1 ELSE 0 END)     AS NumberEnumerations
+                    FROM [staging].[PackageEvent] evt
+                    INNER JOIN [staging].[PackageEventHousehold] hh ON hh.PackageEventId = evt.Id
+                    GROUP BY evt.PackageId
+                ),
+                FlagCounts AS (
+                    SELECT evt.PackageId,
+                           COUNT(flag.Id) AS NumberDataFlags
+                    FROM [staging].[PackageEvent] evt
+                    INNER JOIN [staging].[PackageEventDataFlag] flag ON flag.PackageEventId = evt.Id
+                    GROUP BY evt.PackageId
+                )
+                SELECT pac.Id,
+                       CASE
+                           WHEN pac.PackageTypeId = 1 THEN 'Data Listing'
+                           WHEN pac.PackageTypeId = 2 THEN 'Data Collection'
+                           WHEN pac.PackageTypeId = 3 THEN 'Enrollment'
+                           WHEN pac.PackageTypeId = 4 THEN 'Digital Payment Enrollment'
+                           WHEN pac.PackageTypeId = 5 THEN 'Community Validation'
+                       END AS PackageType,
+                       pac.OrgUnitId,
+                       pac.ParentOrgUnitName,
+                       pac.UniqueCode,
+                       pac.[Description],
+                       FORMAT(pac.Created, 'yyyy-MM-dd hh:mm tt') AS Created,
+                       ISNULL(hc.NumberHouseholds, 0)   AS NumberHouseholds,
+                       ISNULL(hc.NumberEnumerations, 0) AS NumberEnumerations,
+                       ISNULL(fc.NumberDataFlags, 0)    AS NumberDataFlags,
+                       0                                AS NumberCompletedSubPackages,
+                       pac.FormId
+                FROM [staging].[Package] pac
+                LEFT JOIN HouseholdCounts hc ON hc.PackageId = pac.Id
+                LEFT JOIN FlagCounts      fc ON fc.PackageId = pac.Id";
 
             return await connection.QueryAsync<PackageForManagementDto>(sql);
         }
@@ -171,50 +188,99 @@ public class PackageQueries
 
     public async Task<IEnumerable<PackageDto>> GetCollectionPackagesForDeviceAsync(string deviceId)
     {
-        using (var connection = new SqlConnection(_connectionString))
+        using var connection = new SqlConnection(_connectionString);
+        connection.Open();
+
+        var packages = await connection.QueryAsync<PackageDto>(
+            @"SELECT pac.Id,
+                     CASE
+                         WHEN pac.PackageTypeId = 1 THEN 'Data Listing'
+                         WHEN pac.PackageTypeId = 2 THEN 'Data Collection'
+                         WHEN pac.PackageTypeId = 3 THEN 'Enrollment'
+                         WHEN pac.PackageTypeId = 4 THEN 'Digital Payment Enrollment'
+                         WHEN pac.PackageTypeId = 5 THEN 'Community Validation'
+                     END AS PackageType,
+                     pac.OrgUnitId,
+                     pac.ParentOrgUnitName,
+                     pac.UniqueCode,
+                     pac.[Description],
+                     FORMAT(pac.Created, 'yyyy-MM-dd hh:mm tt') AS Created,
+                     pac.FormId
+              FROM [staging].[Package] pac
+              WHERE pac.PackageTypeId IN (1, 2, 5)
+                AND pac.PackageClosed_Status = 0
+                AND EXISTS (
+                    SELECT dev.Id
+                    FROM [staging].[PackageEvent] evt
+                    INNER JOIN [staging].[PackageEventDevice] dev ON dev.PackageEventId = evt.Id
+                    WHERE evt.PackageId = pac.Id AND dev.DeviceId = @DeviceId
+                )",
+            new { DeviceId = deviceId });
+
+        var packageList = packages.AsList();
+        if (packageList.Count == 0) return packageList;
+
+        var packageIds = packageList.Select(p => p.Id).ToList();
+
+        var eventRows = await connection.QueryAsync<PackageEventRow>(
+            @"SELECT pevt.PackageId AS OwnerId,
+                     pevt.Id,
+                     pevt.OrgUnitId,
+                     pevt.OrgUnitName,
+                     CASE
+                         WHEN pevt.PackageStatusId = 1 THEN 'Stage Preparation'
+                         WHEN pevt.PackageStatusId = 2 THEN 'Data Management'
+                         WHEN pevt.PackageStatusId = 3 THEN 'Data Acceptance'
+                         WHEN pevt.PackageStatusId = 4 THEN 'Gateway'
+                     END AS PackageStatus,
+                     CASE
+                         WHEN pevt.PackageSubStatusId = 1 THEN 'Data Listing'
+                         WHEN pevt.PackageSubStatusId = 2 THEN 'Data Collection'
+                     END AS PackageSubStatus,
+                     COUNT(peh.Id) AS HouseholdCount
+              FROM [staging].[PackageEvent] pevt
+              LEFT JOIN [staging].[PackageEventHousehold] peh ON peh.PackageEventId = pevt.Id
+              WHERE pevt.PackageId IN @PackageIds
+              GROUP BY pevt.PackageId, pevt.Id, pevt.OrgUnitId, pevt.OrgUnitName, pevt.PackageStatusId, pevt.PackageSubStatusId
+              ORDER BY pevt.Id",
+            new { PackageIds = packageIds });
+
+        var eventsByPackage = eventRows
+            .GroupBy(e => e.OwnerId)
+            .ToDictionary(g => g.Key, g => (IEnumerable<PackageEventDto>)g.Select(e => e.ToDto()).ToList());
+
+        var villageRows = await connection.QueryAsync<VillageRow>(
+            @"SELECT pevt.PackageId AS OwnerId, ou_v.[Name] AS Village
+              FROM [staging].[PackageEvent] pevt
+              INNER JOIN [nissa].[OrgUnit] ou_ea ON pevt.OrgUnitId = ou_ea.OrgUnitGuid
+              INNER JOIN [nissa].[OrgUnit] ou_v  ON ou_v.ParentOrgUnitId = ou_ea.Id
+              WHERE pevt.PackageId IN @PackageIds
+              ORDER BY ou_v.[Name]",
+            new { PackageIds = packageIds });
+
+        var villagesByPackage = villageRows
+            .GroupBy(v => v.OwnerId)
+            .ToDictionary(g => g.Key, g => (IEnumerable<string>)g.Select(v => v.Village).ToList());
+
+        var formIds = packageList
+            .Where(p => p.FormId.HasValue)
+            .Select(p => p.FormId!.Value)
+            .Distinct()
+            .ToList();
+
+        var formCache = new Dictionary<int, FormDto>();
+        foreach (var formId in formIds)
+            formCache[formId] = await LoadFormAsync(formId, connection);
+
+        foreach (var package in packageList)
         {
-            connection.Open();
-
-            var packages = await connection.QueryAsync<PackageDto>(
-                $@"
-					SELECT	pac.Id,
-							CASE 
-								WHEN pac.PackageTypeId = 1 THEN 'Data Listing' 
-								WHEN pac.PackageTypeId = 2 THEN 'Data Collection' 
-								WHEN pac.PackageTypeId = 3 THEN 'Enrollment' 
-								WHEN pac.PackageTypeId = 4 THEN 'Digital Payment Enrollment' 
-								WHEN pac.PackageTypeId = 5 THEN 'Community Validation' 
-							END AS 'PackageType',
-							pac.OrgUnitId,
-							pac.ParentOrgUnitName,
-							pac.UniqueCode,
-							pac.[Description],
-							FORMAT (pac.Created, 'yyyy-MM-dd hh:mm tt') AS Created,
-                            pac.FormId
-					FROM [staging].[Package] pac
-					WHERE pac.PackageTypeId IN (1, 2, 5)
-                        AND pac.PackageClosed_Status = 0
-						AND EXISTS 
-							(
-								SELECT dev.Id 
-								FROM [staging].[PackageEvent] evt 
-									INNER JOIN [staging].[PackageEventDevice] dev ON dev.PackageEventId = evt.Id
-								WHERE evt.PackageId = pac.Id AND dev.DeviceId = '{deviceId}'
-							)");
-
-            foreach (var package in packages)
-            {
-                await PopulatePackageEventsAsync(package, connection);
-                await PopulatePackageVillagesAsync(package, connection);
-                if(package.FormId.HasValue)
-                {
-                    var form = await PreparePackageFormAsync(package.FormId.Value, connection);
-                    package.Forms.Add(form);
-                }
-            }
-
-            return packages;
+            package.Events   = eventsByPackage.TryGetValue(package.Id, out var evts)     ? evts     : [];
+            package.Villages = villagesByPackage.TryGetValue(package.Id, out var villages) ? villages : [];
+            if (package.FormId.HasValue && formCache.TryGetValue(package.FormId.Value, out var form))
+                package.Forms.Add(form);
         }
+
+        return packageList;
     }
 
     public async Task<IEnumerable<PackageEventForManagementDto>> GetPackageEventsForManagementAsync(int packageId, int packageStatusId)
@@ -223,55 +289,77 @@ public class PackageQueries
         {
             connection.Open();
 
-            var packageEvents = await connection.QueryAsync<PackageEventForManagementDto>(
-                $@"
-                    SELECT 
-	                    Id,
-	                    0 AS OrgUnitId,
-	                    OrgUnitId AS orgunitGuid,
-	                    OrgUnitName,
-	                    CASE 
-		                    WHEN PackageStatusId  = 1 THEN 'Stage Preparation'
-		                    WHEN PackageStatusId  = 2 THEN 'Data Management'
-		                    WHEN PackageStatusId  = 3 THEN 'Data Acceptance'
-		                    WHEN PackageStatusId  = 4 THEN 'Gateway'
-		                    ELSE 'UNKNOWN'
-	                    END AS PackageStatus,
-	                    CASE 
-		                    WHEN PackageSubStatusId  = 1 THEN 'Data Listing'
-		                    WHEN PackageSubStatusId  = 2 THEN 'Data Collection'
-		                    ELSE 'UNKNOWN'
-	                    END AS PackageSubStatus,
-	                    (SELECT COUNT(*) FROM staging.PackageEventHousehold hh WHERE hh.PackageEventId = pe.Id) AS HouseholdCount,
-	                    (SELECT COUNT(*) FROM staging.PackageEventHousehold hh WHERE hh.PackageEventId = pe.Id AND hh.ListingStatusId = 2) AS HouseholdListedCount,
-	                    (SELECT COUNT(*) FROM staging.PackageEventHousehold hh WHERE hh.PackageEventId = pe.Id AND hh.CollectionStatusId = 2) AS HouseholdEnumeratedCount,
-	                    (SELECT COUNT(*) FROM staging.PackageEventHousehold hh WHERE hh.PackageEventId = pe.Id AND hh.Accepted_Status = 1) AS HouseholdAcceptedCount,
-	                    (SELECT COUNT(*) FROM staging.PackageEventHousehold hh WHERE hh.PackageEventId = pe.Id AND hh.Rejected_Status = 1) AS HouseholdRejectedCount,
-	                    (SELECT COUNT(*) FROM staging.PackageEventDataFlag flag WHERE flag.PackageEventId = pe.Id) AS NumberFlags,
-	                    CASE 
-		                    WHEN (SELECT COUNT(*) FROM staging.PackageEventHousehold hh WHERE hh.PackageEventId = pe.Id) > 0 THEN
-			                    CAST(((SELECT COUNT(*) FROM staging.PackageEventHousehold hh WHERE hh.PackageEventId = pe.Id AND hh.ListingStatusId = 2) * 100.0 / (SELECT COUNT(*) FROM staging.PackageEventHousehold hh WHERE hh.PackageEventId = pe.Id)) AS int)
-		                    ELSE 0
-	                    END AS ListedPercentage,
-	                    CASE 
-		                    WHEN (SELECT COUNT(*) FROM staging.PackageEventHousehold hh WHERE hh.PackageEventId = pe.Id) > 0 THEN
-			                    CAST(((SELECT COUNT(*) FROM staging.PackageEventHousehold hh WHERE hh.PackageEventId = pe.Id AND hh.CollectionStatusId = 2) * 100.0 / (SELECT COUNT(*) FROM staging.PackageEventHousehold hh WHERE hh.PackageEventId = pe.Id)) AS int)
-		                    ELSE 0
-	                    END AS EnumeratedPercentage,
-	                    0.00 AS StatusPercentage,
-	                    (SELECT COUNT(*) FROM staging.PackageEventHousehold hh WHERE hh.PackageEventId = pe.Id AND EXISTS(SELECT Id FROM staging.PackageEventHouseholdSynch synch WHERE synch.PackageEventHouseholdId = hh.Id)) AS HouseholdPayloadCount,
-	                    '' AS LastEnumerationDetail
-                    FROM staging.PackageEvent pe
-                    WHERE PackageId = {packageId}
-                    AND PackageStatusId = {packageStatusId}");
+            const string sql = @"
+                WITH HouseholdStats AS (
+                    SELECT hh.PackageEventId,
+                           COUNT(*)                                                        AS HouseholdCount,
+                           SUM(CASE WHEN hh.ListingStatusId    = 2 THEN 1 ELSE 0 END)     AS HouseholdListedCount,
+                           SUM(CASE WHEN hh.CollectionStatusId = 2 THEN 1 ELSE 0 END)     AS HouseholdEnumeratedCount,
+                           SUM(CASE WHEN hh.Accepted_Status    = 1 THEN 1 ELSE 0 END)     AS HouseholdAcceptedCount,
+                           SUM(CASE WHEN hh.Rejected_Status    = 1 THEN 1 ELSE 0 END)     AS HouseholdRejectedCount
+                    FROM [staging].[PackageEventHousehold] hh
+                    INNER JOIN [staging].[PackageEvent] pe ON pe.Id = hh.PackageEventId
+                    WHERE pe.PackageId = @PackageId
+                    GROUP BY hh.PackageEventId
+                ),
+                FlagStats AS (
+                    SELECT flag.PackageEventId,
+                           COUNT(*) AS NumberFlags
+                    FROM [staging].[PackageEventDataFlag] flag
+                    INNER JOIN [staging].[PackageEvent] pe ON pe.Id = flag.PackageEventId
+                    WHERE pe.PackageId = @PackageId
+                    GROUP BY flag.PackageEventId
+                ),
+                PayloadStats AS (
+                    SELECT hh.PackageEventId,
+                           COUNT(*) AS HouseholdPayloadCount
+                    FROM [staging].[PackageEventHousehold] hh
+                    INNER JOIN [staging].[PackageEvent] pe ON pe.Id = hh.PackageEventId
+                    WHERE pe.PackageId = @PackageId
+                      AND EXISTS (SELECT 1 FROM [staging].[PackageEventHouseholdSynch] s WHERE s.PackageEventHouseholdId = hh.Id)
+                    GROUP BY hh.PackageEventId
+                )
+                SELECT pe.Id,
+                       0           AS OrgUnitId,
+                       pe.OrgUnitId AS OrgUnitGuid,
+                       pe.OrgUnitName,
+                       CASE
+                           WHEN pe.PackageStatusId = 1 THEN 'Stage Preparation'
+                           WHEN pe.PackageStatusId = 2 THEN 'Data Management'
+                           WHEN pe.PackageStatusId = 3 THEN 'Data Acceptance'
+                           WHEN pe.PackageStatusId = 4 THEN 'Gateway'
+                           ELSE 'UNKNOWN'
+                       END AS PackageStatus,
+                       CASE
+                           WHEN pe.PackageSubStatusId = 1 THEN 'Data Listing'
+                           WHEN pe.PackageSubStatusId = 2 THEN 'Data Collection'
+                           ELSE 'UNKNOWN'
+                       END AS PackageSubStatus,
+                       ISNULL(hs.HouseholdCount,           0) AS HouseholdCount,
+                       ISNULL(hs.HouseholdListedCount,      0) AS HouseholdListedCount,
+                       ISNULL(hs.HouseholdEnumeratedCount,  0) AS HouseholdEnumeratedCount,
+                       ISNULL(hs.HouseholdAcceptedCount,    0) AS HouseholdAcceptedCount,
+                       ISNULL(hs.HouseholdRejectedCount,    0) AS HouseholdRejectedCount,
+                       ISNULL(fs.NumberFlags,               0) AS NumberFlags,
+                       CASE WHEN ISNULL(hs.HouseholdCount, 0) > 0
+                            THEN CAST(hs.HouseholdListedCount     * 100.0 / hs.HouseholdCount AS int)
+                            ELSE 0
+                       END AS ListedPercentage,
+                       CASE WHEN ISNULL(hs.HouseholdCount, 0) > 0
+                            THEN CAST(hs.HouseholdEnumeratedCount * 100.0 / hs.HouseholdCount AS int)
+                            ELSE 0
+                       END AS EnumeratedPercentage,
+                       0   AS StatusPercentage,
+                       ISNULL(ps.HouseholdPayloadCount,     0) AS HouseholdPayloadCount,
+                       ''  AS LastEnumerationDetail
+                FROM [staging].[PackageEvent] pe
+                LEFT JOIN HouseholdStats hs ON hs.PackageEventId = pe.Id
+                LEFT JOIN FlagStats      fs ON fs.PackageEventId = pe.Id
+                LEFT JOIN PayloadStats   ps ON ps.PackageEventId = pe.Id
+                WHERE pe.PackageId      = @PackageId
+                  AND pe.PackageStatusId = @PackageStatusId";
 
-            foreach (var packageEvent in packageEvents)
-            {
-                //await PopulatePackageEventHouseholdAttributesAsync(household, connection);
-                //await PopulatePackageEventHouseholdMembersAsync(household, connection);
-            }
-
-            return packageEvents;
+            return await connection.QueryAsync<PackageEventForManagementDto>(sql, new { PackageId = packageId, PackageStatusId = packageStatusId });
         }
     }
 
@@ -541,11 +629,7 @@ public class PackageQueries
                     INNER JOIN [staging].PackageEvent evt ON evth.PackageEventId = evt.Id
                     WHERE evt.Id = {packageEventId}");
 
-            foreach (var household in households)
-            {
-                await PopulatePackageEventHouseholdAttributesAsync(household, connection);
-                await PopulatePackageEventHouseholdMembersAsync(household, connection);
-            }
+            await BatchPopulateAsync(households.AsList(), connection);
 
             return households;
         }
@@ -607,194 +691,324 @@ public class PackageQueries
 
             var households = await connection.QueryAsync<PackageEventHouseholdDto>(sql);
 
-            foreach (var household in households)
-            {
-                await PopulatePackageEventHouseholdAttributesAsync(household, connection);
-                await PopulatePackageEventHouseholdMembersAsync(household, connection);
-            }
+            await BatchPopulateAsync(households.AsList(), connection);
 
             return households;
         }
     }
 
-    private async Task PopulatePackageEventsAsync(PackageDto package, SqlConnection connection)
+    private async Task<FormDto> LoadFormAsync(int formId, SqlConnection connection)
     {
-        package.Events = await connection.QueryAsync<PackageEventDto>(
-            $@"SELECT	pevt.Id,
-						pevt.OrgUnitId,
-						pevt.OrgUnitName,
-						CASE 
-							WHEN pevt.PackageStatusId = 1 THEN 'Stage Preparation' 
-							WHEN pevt.PackageStatusId = 2 THEN 'Data Management' 
-							WHEN pevt.PackageStatusId = 3 THEN 'Data Acceptance' 
-							WHEN pevt.PackageStatusId = 4 THEN 'Gateway' 
-						END AS 'PackageStatus',
-						CASE 
-							WHEN pevt.PackageSubStatusId = 1 THEN 'Data Listing' 
-							WHEN pevt.PackageStatusId = 2 THEN 'Data Collection' 
-						END AS 'PackageSubStatus',		
-						(SELECT COUNT(peh.Id) FROM [staging].[PackageEventHousehold] peh 
-							WHERE peh.PackageEventId = pevt.Id
-						) AS HouseholdCount
-				FROM [staging].[PackageEvent] pevt
-				WHERE	
-					pevt.PackageId = {package.Id}");
-    }
+        var form = await connection.QuerySingleAsync<FormDto>(
+            @"SELECT f.Id, f.ShortName, f.FriendlyName,
+                     CONCAT(f.CurrentVersion_Major, '.', f.CurrentVersion_Minor) AS CurrentVersion
+              FROM [staging].[Form] f WHERE f.Id = @FormId",
+            new { FormId = formId });
 
-    private async Task PopulatePackageVillagesAsync(PackageDto package, SqlConnection connection)
-    {
-        package.Villages = await connection.QueryAsync<string>(
-             $@"SELECT	ou_v.[Name]
-				FROM [staging].[PackageEvent] pevt
-					INNER JOIN [nissa].[OrgUnit] ou_ea ON pevt.OrgUnitId = ou_ea.OrgUnitGuid
-					INNER JOIN [nissa].[OrgUnit] ou_v ON ou_v.ParentOrgUnitId = ou_ea.Id
-				WHERE
-					pevt.PackageId = {package.Id}
-					ORDER BY ou_v.Name");
-    }
+        var attributeRows = await connection.QueryAsync<FormAttributeRow>(
+            @"SELECT cat.ExtendableTypeName,
+                     cat.ShortName AS Category,
+                     ele.Id,
+                     ele.CustomAttributeConfigurationGuid,
+                     ele.AttributeKey,
+                     CASE
+                         WHEN ele.CustomAttributeTypeId = 1  THEN 'None'
+                         WHEN ele.CustomAttributeTypeId = 2  THEN 'Numeric'
+                         WHEN ele.CustomAttributeTypeId = 3  THEN 'Alpha Numeric'
+                         WHEN ele.CustomAttributeTypeId = 4  THEN 'Selection'
+                         WHEN ele.CustomAttributeTypeId = 5  THEN 'DateTime'
+                         WHEN ele.CustomAttributeTypeId = 6  THEN 'First Class Property'
+                         WHEN ele.CustomAttributeTypeId = 7  THEN 'Calculation'
+                         WHEN ele.CustomAttributeTypeId = 8  THEN 'Photo'
+                         WHEN ele.CustomAttributeTypeId = 9  THEN 'Multiselection'
+                         WHEN ele.CustomAttributeTypeId = 10 THEN 'GPSCoords'
+                     END AS CustomAttributeType,
+                     ele.AttributeCode,
+                     ele.FriendlyName AS EnglishDescription,
+                     ele.Help         AS EnglishHelp,
+                     ''               AS SesothoDescription,
+                     ''               AS SesothoHelp,
+                     ele.IsRequired   AS Required,
+                     ele.StringMaxLength,
+                     ele.NumericMinValue,
+                     ele.NumericMaxValue,
+                     ele.FutureDateOnly,
+                     ele.PastDateOnly,
+                     ele.RegEx
+              FROM [staging].[FormCategory] cat
+              INNER JOIN [staging].[FormElement] ele ON cat.Id = ele.FormCategoryId
+              WHERE cat.FormId = @FormId
+                AND cat.ExtendableTypeName IN ('Household', 'HouseholdMember')
+              ORDER BY cat.[Order], ele.[Order]",
+            new { FormId = formId });
 
-    private async Task<FormDto> PreparePackageFormAsync(int formId, SqlConnection connection)
-    {
-        var sql =
-            $@"SELECT   f.Id,
-		                    f.ShortName,
-		                    f.FriendlyName,
-		                    CONCAT(f.CurrentVersion_Major, '.', f.CurrentVersion_Minor) AS CurrentVersion
-                    FROM staging.Form f
-                    WHERE f.Id = {formId}";
+        var allRows = attributeRows.ToList();
 
-        var form = await connection.QuerySingleAsync<FormDto>(sql);
+        var selectionKeys = allRows
+            .Where(r => r.CustomAttributeType == "Selection" || r.CustomAttributeType == "Multiselection")
+            .Select(r => r.AttributeKey)
+            .Distinct()
+            .ToList();
 
-        var householdExtendableType = await ExtractFormAttributes(formId, "Household", connection);
-        var householdMemberExtendableType = await ExtractFormAttributes(formId, "HouseholdMember", connection);
+        var selectionLookup = Enumerable.Empty<SelectionValueRow>().ToLookup(r => r.AttributeKey, r => r.ToDto());
+        if (selectionKeys.Count > 0)
+        {
+            var selectionRows = await connection.QueryAsync<SelectionValueRow>(
+                @"SELECT AttributeKey, SelectionKey AS [Key], [Value]
+                  FROM [nissa].[SelectionDataItem]
+                  WHERE AttributeKey IN @Keys
+                  ORDER BY CAST(SelectionKey AS int) ASC",
+                new { Keys = selectionKeys });
 
-        form.ExtendableTypes.Add(householdExtendableType);
-        form.ExtendableTypes.Add(householdMemberExtendableType);
+            selectionLookup = selectionRows.ToLookup(r => r.AttributeKey, r => r.ToDto());
+        }
+
+        foreach (var extendableTypeName in new[] { "Household", "HouseholdMember" })
+        {
+            var typeRows = allRows.Where(r => r.ExtendableTypeName == extendableTypeName).ToList();
+            var categories = typeRows
+                .GroupBy(r => r.Category)
+                .Select(g => new FormCategoryDto
+                {
+                    Category = g.Key,
+                    Attributes = g.Select(r => r.ToDto(selectionLookup[r.AttributeKey])).ToList()
+                })
+                .ToList();
+
+            form.ExtendableTypes.Add(new FormExtendableTypeDto
+            {
+                ExtendableTypeName = extendableTypeName,
+                Categories = categories
+            });
+        }
 
         return form;
     }
 
-    private async Task<FormExtendableTypeDto> ExtractFormAttributes(int formId, string extendableTypeName, SqlConnection connection)
+    private sealed class PackageEventRow
     {
-        var extendableType = new FormExtendableTypeDto()
+        public int OwnerId { get; set; }
+        public int Id { get; set; }
+        public Guid OrgUnitId { get; set; }
+        public string OrgUnitName { get; set; }
+        public string PackageStatus { get; set; }
+        public string PackageSubStatus { get; set; }
+        public int HouseholdCount { get; set; }
+        public PackageEventDto ToDto() => new()
         {
-            ExtendableTypeName = extendableTypeName
+            Id = Id, OrgUnitId = OrgUnitId, OrgUnitName = OrgUnitName,
+            PackageStatus = PackageStatus, PackageSubStatus = PackageSubStatus,
+            HouseholdCount = HouseholdCount
         };
+    }
 
-        extendableType.Categories = await connection.QueryAsync<FormCategoryDto>(
-                $@"
-                    SELECT ShortName AS Category
-                    FROM [staging].[FormCategory] cat
-                    WHERE FormId = {formId}
-	                    AND ExtendableTypeName = '{extendableTypeName}'
-                    ORDER BY [Order]");
+    private sealed class VillageRow
+    {
+        public int OwnerId { get; set; }
+        public string Village { get; set; }
+    }
 
-        foreach (var category in extendableType.Categories)
+    private sealed class FormAttributeRow
+    {
+        public string ExtendableTypeName { get; set; }
+        public string Category { get; set; }
+        public int Id { get; set; }
+        public Guid CustomAttributeConfigurationGuid { get; set; }
+        public string AttributeKey { get; set; }
+        public string CustomAttributeType { get; set; }
+        public string AttributeCode { get; set; }
+        public string EnglishDescription { get; set; }
+        public string EnglishHelp { get; set; }
+        public string SesothoDescription { get; set; }
+        public string SesothoHelp { get; set; }
+        public bool Required { get; set; }
+        public int? StringMaxLength { get; set; }
+        public int? NumericMinValue { get; set; }
+        public int? NumericMaxValue { get; set; }
+        public bool FutureDateOnly { get; set; }
+        public bool PastDateOnly { get; set; }
+        public string RegEx { get; set; }
+        public FormAttributeDto ToDto(IEnumerable<FormAttributeSelectionValueDto> selectionValues) => new()
         {
-            category.Attributes = await connection.QueryAsync<FormAttributeDto>(
-                $@"SELECT	ele.Id,
-		                    CustomAttributeConfigurationGuid,
-                            AttributeKey,
-		                    CASE 
-			                    WHEN CustomAttributeTypeId = 1 THEN 'None' 
-			                    WHEN CustomAttributeTypeId = 2 THEN 'Numeric' 
-			                    WHEN CustomAttributeTypeId = 3 THEN 'Alpha Numeric' 
-			                    WHEN CustomAttributeTypeId = 4 THEN 'Selection' 
-			                    WHEN CustomAttributeTypeId = 5 THEN 'DateTime'
-			                    WHEN CustomAttributeTypeId = 6 THEN 'First Class Property' 
-                                WHEN CustomAttributeTypeId = 7 THEN 'Calculation' 
-                                WHEN CustomAttributeTypeId = 8 THEN 'Photo' 
-                                WHEN CustomAttributeTypeId = 9 THEN 'Multiselection' 
-                                WHEN CustomAttributeTypeId = 10 THEN 'GPSCoords' 
-		                    END AS CustomAttributeType,
-		                    AttributeCode,
-		                    ele.FriendlyName AS EnglishDescription,
-                            ele.Help AS EnglishHelp,
-		                    '' AS SesothoDescription,
-                            '' AS SesothoHelp,
-		                    IsRequired AS 'Required',
-                            StringMaxLength,
-                            NumericMinValue,
-                            NumericMaxValue,
-                            FutureDateOnly,
-                            PastDateOnly,
-                            RegEx
-                    FROM [staging].[FormCategory] cat
-	                    INNER JOIN [staging].[FormElement] ele ON cat.Id = ele.FormCategoryId
-                    WHERE cat.FormId = {formId}
-	                    AND Category = '{category.Category}' 
-                    ORDER BY ele.[Order]");
+            Id = Id,
+            CustomAttributeConfigurationGuid = CustomAttributeConfigurationGuid,
+            AttributeKey = AttributeKey,
+            CustomAttributeType = CustomAttributeType,
+            AttributeCode = AttributeCode,
+            EnglishDescription = EnglishDescription,
+            EnglishHelp = EnglishHelp,
+            SesothoDescription = SesothoDescription,
+            SesothoHelp = SesothoHelp,
+            Required = Required,
+            StringMaxLength = StringMaxLength,
+            NumericMinValue = NumericMinValue,
+            NumericMaxValue = NumericMaxValue,
+            FutureDateOnly = FutureDateOnly,
+            PastDateOnly = PastDateOnly,
+            RegEx = RegEx,
+            SelectionValues = selectionValues.ToList()
+        };
+    }
 
-            foreach (var attribute in category.Attributes)
-            {
-                if (attribute.CustomAttributeType == "Selection" || attribute.CustomAttributeType == "Multiselection")
-                {
-                    attribute.SelectionValues = await connection.QueryAsync<FormAttributeSelectionValueDto>(
-                        $@"SELECT   SelectionKey, [Value]
-                        FROM [nissa].[SelectionDataItem]
-                        WHERE AttributeKey = '{attribute.AttributeKey}'
-                        ORDER BY CAST(SelectionKey as int) ASC");
-                }
-            }
+    private sealed class SelectionValueRow
+    {
+        public string AttributeKey { get; set; }
+        public int Key { get; set; }
+        public string Value { get; set; }
+        public FormAttributeSelectionValueDto ToDto() => new() { Key = Key, Value = Value };
+    }
+
+    private static async Task<List<T>> QueryChunkedAsync<T>(
+        SqlConnection connection, string sql, IList<int> ids, int chunkSize = 1000)
+    {
+        if (ids.Count == 0) return [];
+        if (ids.Count <= chunkSize)
+            return (await connection.QueryAsync<T>(sql, new { Ids = ids })).AsList();
+
+        var results = new List<T>(ids.Count);
+        foreach (var chunk in ids.Chunk(chunkSize))
+            results.AddRange(await connection.QueryAsync<T>(sql, new { Ids = chunk }));
+        return results;
+    }
+
+    private async Task BatchPopulateAsync(IList<PackageEventHouseholdDto> households, SqlConnection connection)
+    {
+        if (households.Count == 0) return;
+
+        var householdIds = households.Select(h => h.Id).ToList();
+
+        var householdAttrs = await QueryChunkedAsync<HouseholdAttrRow>(connection,
+            @"SELECT attr.PackageEventHouseholdId AS OwnerId,
+                     cus.Category,
+                     attr.AttributeKey AS [Key],
+                     '' AS Value,
+                     0 AS PMT,
+                     '' AS SelectionValue
+              FROM [staging].[PackageEventHouseholdAttribute] attr
+              INNER JOIN [nissa].[CustomAttributeConfiguration] cus
+                  ON attr.AttributeKey = cus.AttributeKey AND cus.ExtendableTypeName = 'Household'
+              WHERE attr.PackageEventHouseholdId IN @Ids
+              ORDER BY cus.Id ASC",
+            householdIds);
+
+        var attrsByHousehold = householdAttrs
+            .GroupBy(r => r.OwnerId)
+            .ToDictionary(g => g.Key, g => g.Select(r => r.ToDto()).ToList());
+
+        var memberRows = await QueryChunkedAsync<MemberRow>(connection,
+            @"SELECT evthm.Id,
+                     evth.HouseholdId,
+                     evth.HouseholdGuid,
+                     evthm.HouseholdMemberId,
+                     evthm.HouseholdMemberGuid,
+                     evthm.FirstName AS Name,
+                     evthm.Surname,
+                     evthm.IDDocumentType,
+                     evthm.IdentificationNumber,
+                     evthm.DateOfBirth,
+                     evthm.Gender,
+                     FORMAT(evthm.Created, 'yyyy-MM-dd hh:mm tt') AS CreatedDetail,
+                     FORMAT(evthm.LastModified, 'yyyy-MM-dd hh:mm tt') AS UpdatedDetail,
+                     evth.CommunityClassification,
+                     evthm.PackageEventHouseholdId AS OwnerId
+              FROM [staging].PackageEventHouseholdMember evthm
+              INNER JOIN [staging].PackageEventHousehold evth ON evthm.PackageEventHouseholdId = evth.Id
+              WHERE evthm.PackageEventHouseholdId IN @Ids
+              ORDER BY evthm.Id",
+            householdIds);
+
+        var memberAttrLookup = Enumerable.Empty<MemberAttrRow>().ToLookup(r => r.OwnerId, r => r.ToDto());
+        if (memberRows.Count > 0)
+        {
+            var memberIds = memberRows.Select(m => m.Id).ToList();
+            var memberAttrs = await QueryChunkedAsync<MemberAttrRow>(connection,
+                @"SELECT attr.PackageEventHouseholdMemberId AS OwnerId,
+                         cus.Category,
+                         attr.AttributeKey AS [Key],
+                         '' AS Value,
+                         0 AS PMT,
+                         '' AS SelectionValue
+                  FROM [staging].[PackageEventHouseholdMemberAttribute] attr
+                  INNER JOIN [nissa].[CustomAttributeConfiguration] cus
+                      ON attr.AttributeKey = cus.AttributeKey AND cus.ExtendableTypeName = 'HouseholdMember'
+                  WHERE attr.PackageEventHouseholdMemberId IN @Ids
+                  ORDER BY cus.Id ASC",
+                memberIds);
+
+            memberAttrLookup = memberAttrs.ToLookup(r => r.OwnerId, r => r.ToDto());
         }
 
-        return extendableType;
-    }
+        var membersByHousehold = memberRows
+            .GroupBy(m => m.OwnerId)
+            .ToDictionary(g => g.Key, g => g.Select(m => m.ToDto(memberAttrLookup[m.Id])).ToList());
 
-    private async Task PopulatePackageEventHouseholdAttributesAsync(PackageEventHouseholdDto household, SqlConnection connection)
-    {
-        household.HouseholdAttributes = await connection.QueryAsync<AttributeValueDto>(
-            $@"SELECT	cus.Category,
-		                attr.AttributeKey AS 'Key',
-		                '' AS 'Value',
-		                0 AS PMT,
-		                '' AS SelectionValue
-                FROM [staging].[PackageEventHouseholdAttribute] attr
-                INNER JOIN [nissa].[CustomAttributeConfiguration] cus ON attr.AttributeKey = cus.AttributeKey AND cus.ExtendableTypeName = 'Household'
-                WHERE attr.PackageEventHouseholdId = {household.Id}
-                ORDER BY cus.Id ASC");
-    }
-
-    private async Task PopulatePackageEventHouseholdMembersAsync(PackageEventHouseholdDto household, SqlConnection connection)
-    {
-        household.Members = await connection.QueryAsync<PackageEventHouseholdMemberDto>(
-            $@"SELECT   evthm.Id,
-		                evth.HouseholdId,
-		                evth.HouseholdGuid,
-                        evthm.HouseholdMemberId,
-		                evthm.HouseholdMemberGuid,
-		                evthm.FirstName AS 'Name',
-		                evthm.Surname,
-		                evthm.IDDocumentType,
-		                evthm.IdentificationNumber,
-                        evthm.DateOfBirth,
-                        evthm.Gender,
-		                FORMAT (evthm.Created, 'yyyy-MM-dd hh:mm tt') AS CreatedDetail,
-		                FORMAT (evthm.LastModified, 'yyyy-MM-dd hh:mm tt') AS UpdatedDetail,
-		                0, 0, 0,
-		                evth.CommunityClassification
-                FROM [staging].PackageEventHouseholdMember evthm
-                INNER JOIN [staging].PackageEventHousehold evth ON evthm.PackageEventHouseholdId = evth.Id
-                WHERE evthm.PackageEventHouseholdId = {household.Id}
-                ORDER BY evthm.Id");
-
-        foreach (var householdmember in household.Members)
+        foreach (var household in households)
         {
-            await PopulatePackageEventHouseholdMemberAttributesAsync(householdmember, connection);
+            household.HouseholdAttributes = attrsByHousehold.TryGetValue(household.Id, out var attrs)
+                ? attrs
+                : [];
+            household.Members = membersByHousehold.TryGetValue(household.Id, out var members)
+                ? members
+                : [];
         }
     }
 
-    private async Task PopulatePackageEventHouseholdMemberAttributesAsync(PackageEventHouseholdMemberDto householdMember, SqlConnection connection)
+    private sealed class HouseholdAttrRow
     {
-        householdMember.HouseholdMemberAttributes = await connection.QueryAsync<AttributeValueDto>(
-            $@"SELECT	cus.Category,
-		                attr.AttributeKey AS 'Key',
-		                '' AS 'Value',
-		                0 AS PMT,
-		                '' AS SelectionValue
-                FROM [staging].[PackageEventHouseholdMemberAttribute] attr
-                INNER JOIN [nissa].[CustomAttributeConfiguration] cus ON attr.AttributeKey = cus.AttributeKey AND cus.ExtendableTypeName = 'HouseholdMember'
-                WHERE attr.PackageEventHouseholdMemberId = {householdMember.Id}
-                ORDER BY cus.Id ASC");
+        public int OwnerId { get; set; }
+        public string Category { get; set; }
+        public string Key { get; set; }
+        public string Value { get; set; }
+        public bool PMT { get; set; }
+        public string SelectionValue { get; set; }
+        public AttributeValueDto ToDto() => new() { Category = Category, Key = Key, Value = Value, PMT = PMT, SelectionValue = SelectionValue };
+    }
+
+    private sealed class MemberAttrRow
+    {
+        public int OwnerId { get; set; }
+        public string Category { get; set; }
+        public string Key { get; set; }
+        public string Value { get; set; }
+        public bool PMT { get; set; }
+        public string SelectionValue { get; set; }
+        public AttributeValueDto ToDto() => new() { Category = Category, Key = Key, Value = Value, PMT = PMT, SelectionValue = SelectionValue };
+    }
+
+    private sealed class MemberRow
+    {
+        public int Id { get; set; }
+        public int HouseholdId { get; set; }
+        public Guid HouseholdGuid { get; set; }
+        public int HouseholdMemberId { get; set; }
+        public Guid HouseholdMemberGuid { get; set; }
+        public DateTime? DateOfBirth { get; set; }
+        public string Gender { get; set; }
+        public string Name { get; set; }
+        public string Surname { get; set; }
+        public string IDDocumentType { get; set; }
+        public string IdentificationNumber { get; set; }
+        public string CreatedDetail { get; set; }
+        public string UpdatedDetail { get; set; }
+        public string CommunityClassification { get; set; }
+        public int OwnerId { get; set; }
+
+        public PackageEventHouseholdMemberDto ToDto(IEnumerable<AttributeValueDto> attrs) => new()
+        {
+            Id = Id,
+            HouseholdId = HouseholdId,
+            HouseholdGuid = HouseholdGuid,
+            HouseholdMemberId = HouseholdMemberId,
+            HouseholdMemberGuid = HouseholdMemberGuid,
+            DateOfBirth = DateOfBirth,
+            Gender = Gender,
+            Name = Name,
+            Surname = Surname,
+            IDDocumentType = IDDocumentType,
+            IdentificationNumber = IdentificationNumber,
+            CreatedDetail = CreatedDetail,
+            UpdatedDetail = UpdatedDetail,
+            HouseholdMemberAttributes = attrs
+        };
     }
 }
