@@ -7,6 +7,9 @@ namespace Staging.API.Application.Queries.PackageAggregate;
 
 public interface IPackageQueries
 {
+    Task<DashboardFilterOptionsDto> GetDashboardFilterOptionsAsync();
+    Task<DashboardStatsDto> GetDashboardStatsAsync(string? district = null, int? packageId = null);
+    Task<IEnumerable<DashboardMapPointDto>> GetHouseholdMapPointsAsync(string? district = null, int? packageId = null);
     Task<PackageForManagementDto> GetPackageForManagementAsync(int packageId);
 
     Task<DataFlagForDetailDto> GetPackageEventDataFlagAsync(int packageEventDataFlagId);
@@ -31,11 +34,12 @@ public interface IPackageQueries
     Task<PagedResult<PackageEventHouseholdForManagementDto>> GetPackageEventHouseholdsForManagementAsync(
         int packageEventId,
         PackageEventHouseholdFilter filter,
-        PaginationRequest pagination);
+        PaginationRequest pagination,
+        string? village = null);
 
     Task<PackageEventHouseholdIdDto> GetPackageEventHouseholdIdAsync(int packageEventId, int householdId);
 
-    Task<IEnumerable<PackageEventHouseholdDto>> GetCollectionPackageHouseholdsAsync(int packageEventId);
+    Task<PagedResult<PackageEventHouseholdDto>> GetCollectionPackageHouseholdsAsync(int packageEventId, PaginationRequest pagination);
 
-    Task<IEnumerable<PackageEventHouseholdDto>> GetCommunityValidationPackageHouseholdsAsync(int packageEventId);
+    Task<PagedResult<PackageEventHouseholdDto>> GetCommunityValidationPackageHouseholdsAsync(int packageEventId, PaginationRequest pagination);
 }

@@ -366,7 +366,8 @@ public class PackageQueries
     public async Task<PagedResult<PackageEventHouseholdForManagementDto>> GetPackageEventHouseholdsForManagementAsync(
         int packageEventId,
         PackageEventHouseholdFilter filter,
-        PaginationRequest pagination)
+        PaginationRequest pagination,
+        string? village = null)
     {
         using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync();
@@ -415,52 +416,66 @@ public class PackageQueries
                 "AND hh.ListingStatusId = 2"
         };
 
+        var applyVillage = !string.IsNullOrWhiteSpace(village);
+
+        var villageFilter = applyVillage
+            ? "AND hh.VillageName LIKE @Village"
+            : string.Empty;
+
+        var villageParam = applyVillage ? $"%{village!.Trim()}%" : null;
+
         var sql = $@"
-        SELECT 
-            Id,
-            HouseholdId,
-            HouseholdGuid,
-            VillageName,
-            '' AS CreatedDetail,
-            '' AS UpdatedDetail,
-            CommunityClassification AS Original_CommunityClassification,
-            HouseholdHead AS Original_HouseholdHead,
-            ContactNumber AS Original_ContactNumber,
-            PhysicalAddress AS Original_PhysicalAddress,
-            (
-                SELECT COUNT(*)
-                FROM staging.PackageEventDataFlag flag
-                WHERE flag.PackageEventId = @PackageEventId
-                  AND flag.PackageEventHouseholdId = hh.Id
-            ) AS NumberFlags,
-            CASE 
-                WHEN hh.Accepted_Status = 1 THEN 'Accepted'
-                WHEN hh.Rejected_Status = 1 THEN 'Rejected'
-                ELSE 'Unassigned'
-            END AS AcceptanceStatus,
-            ISNULL((
-                SELECT TOP 1 Payload
-                FROM staging.PackageEventHouseholdSynch synch
-                WHERE synch.PackageEventHouseholdId = hh.Id
-                ORDER BY synch.Created DESC
-            ), '') AS LatestPayload
+        WITH PagedIds AS (
+            SELECT hh.Id
+            FROM staging.PackageEventHousehold hh
+            WHERE hh.PackageEventId = @PackageEventId
+            {where}
+            {villageFilter}
+            ORDER BY hh.HouseholdId
+            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY
+        ),
+        FlagCounts AS (
+            SELECT flag.PackageEventHouseholdId,
+                   COUNT(*) AS FlagCount
+            FROM staging.PackageEventDataFlag flag
+            WHERE flag.PackageEventId = @PackageEventId
+              AND flag.PackageEventHouseholdId IN (SELECT Id FROM PagedIds)
+            GROUP BY flag.PackageEventHouseholdId
+        )
+        SELECT hh.Id,
+               hh.HouseholdId,
+               hh.HouseholdGuid,
+               hh.VillageName,
+               '' AS CreatedDetail,
+               '' AS UpdatedDetail,
+               hh.CommunityClassification AS Original_CommunityClassification,
+               hh.HouseholdHead           AS Original_HouseholdHead,
+               hh.ContactNumber           AS Original_ContactNumber,
+               hh.PhysicalAddress         AS Original_PhysicalAddress,
+               ISNULL(fc.FlagCount, 0)    AS NumberFlags,
+               CASE
+                   WHEN hh.Accepted_Status = 1 THEN 'Accepted'
+                   WHEN hh.Rejected_Status = 1 THEN 'Rejected'
+                   ELSE 'Unassigned'
+               END AS AcceptanceStatus
         FROM staging.PackageEventHousehold hh
-        WHERE hh.PackageEventId = @PackageEventId
-        {where}
-        ORDER BY hh.HouseholdId
-        OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+        INNER JOIN PagedIds pid ON pid.Id = hh.Id
+        LEFT JOIN FlagCounts fc  ON fc.PackageEventHouseholdId = hh.Id
+        ORDER BY hh.HouseholdId;
 
         SELECT COUNT(1)
         FROM staging.PackageEventHousehold hh
         WHERE hh.PackageEventId = @PackageEventId
-        {where};
+        {where}
+        {villageFilter};
         ";
 
         using var multi = await connection.QueryMultipleAsync(sql, new
         {
             PackageEventId = packageEventId,
             Offset = pagination.Offset,
-            PageSize = pagination.PageSize
+            PageSize = pagination.PageSize,
+            Village = villageParam
         });
 
         var households = (await multi
@@ -597,42 +612,57 @@ public class PackageQueries
 
     }
 
-    public async Task<IEnumerable<PackageEventHouseholdDto>> GetCollectionPackageHouseholdsAsync(int packageEventId)
+    public async Task<PagedResult<PackageEventHouseholdDto>> GetCollectionPackageHouseholdsAsync(int packageEventId, PaginationRequest pagination)
     {
-        using (var connection = new SqlConnection(_connectionString))
+        using var connection = new SqlConnection(_connectionString);
+        connection.Open();
+
+        const string sql = @"
+            SELECT evth.Id,
+                   evth.HouseholdId,
+                   evth.HouseholdGuid,
+                   evth.VillageName,
+                   FORMAT(evth.Created,      'yyyy-MM-dd hh:mm tt') AS CreatedDetail,
+                   FORMAT(evth.LastModified, 'yyyy-MM-dd hh:mm tt') AS UpdatedDetail,
+                   evth.HouseholdHead,
+                   evth.CommunityClassification,
+                   '' AS PMTScore,
+                   evth.ContactNumber,
+                   evth.PhysicalAddress,
+                   CASE
+                       WHEN evth.ListingStatusId = 1 THEN 'No Status'
+                       WHEN evth.ListingStatusId = 2 THEN 'Listing And CBC Synched'
+                       WHEN evth.ListingStatusId = 3 THEN 'New Household Synched'
+                       WHEN evth.ListingStatusId = 4 THEN 'Disolved Or Duplicate Household Synched'
+                   END AS ListingStatus,
+                   CASE
+                       WHEN evth.CollectionStatusId = 1 THEN 'No Status'
+                       WHEN evth.CollectionStatusId = 2 THEN 'Enumeration Synched'
+                   END AS CollectionStatus
+            FROM [staging].PackageEventHousehold evth
+            INNER JOIN [staging].PackageEvent evt ON evth.PackageEventId = evt.Id
+            WHERE evt.Id = @PackageEventId
+            ORDER BY evth.Id
+            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+
+            SELECT COUNT(1)
+            FROM [staging].PackageEventHousehold evth
+            INNER JOIN [staging].PackageEvent evt ON evth.PackageEventId = evt.Id
+            WHERE evt.Id = @PackageEventId;";
+
+        using var multi = await connection.QueryMultipleAsync(sql, new
         {
-            connection.Open();
+            PackageEventId = packageEventId,
+            Offset         = pagination.Offset,
+            PageSize       = pagination.PageSize
+        });
 
-            var households = await connection.QueryAsync<PackageEventHouseholdDto>(
-                $@"SELECT   evth.Id,
-                            evth.HouseholdId,
-		                    evth.HouseholdGuid,
-		                    evth.VillageName,
-		                    FORMAT (evth.Created, 'yyyy-MM-dd hh:mm tt') AS CreatedDetail,
-		                    FORMAT (evth.LastModified, 'yyyy-MM-dd hh:mm tt') AS UpdatedDetail,
-		                    evth.HouseholdHead,
-		                    evth.CommunityClassification,
-		                    '' AS PMTScore,
-		                    evth.ContactNumber,
-		                    evth.PhysicalAddress,
-		                    CASE 
-			                    WHEN evth.ListingStatusId = 1 THEN 'No Status'
-			                    WHEN evth.ListingStatusId = 2 THEN 'Listing And CBC Synched'
-			                    WHEN evth.ListingStatusId = 3 THEN 'New Household Synched'
-			                    WHEN evth.ListingStatusId = 4 THEN 'Disolved Or Duplicate Household Synched'
-		                    END AS ListingStatus,
-		                    CASE 
-			                    WHEN evth.CollectionStatusId = 1 THEN 'No Status'
-			                    WHEN evth.CollectionStatusId = 2 THEN 'Enumeration Synched'
-		                    END AS CollectionStatus
-                    FROM [staging].PackageEventHousehold evth
-                    INNER JOIN [staging].PackageEvent evt ON evth.PackageEventId = evt.Id
-                    WHERE evt.Id = {packageEventId}");
+        var households = (await multi.ReadAsync<PackageEventHouseholdDto>()).AsList();
+        var totalCount = await multi.ReadSingleAsync<int>();
 
-            await BatchPopulateAsync(households.AsList(), connection);
+        await BatchPopulateAsync(households, connection);
 
-            return households;
-        }
+        return new PagedResult<PackageEventHouseholdDto>(households, totalCount, pagination.Page, pagination.PageSize);
     }
 
     public async Task<PackageEventHouseholdIdDto> GetPackageEventHouseholdIdAsync(int packageEventId, int householdId)
@@ -657,44 +687,57 @@ public class PackageQueries
         }
     }
 
-    public async Task<IEnumerable<PackageEventHouseholdDto>> GetCommunityValidationPackageHouseholdsAsync(int packageEventId)
+    public async Task<PagedResult<PackageEventHouseholdDto>> GetCommunityValidationPackageHouseholdsAsync(int packageEventId, PaginationRequest pagination)
     {
-        using (var connection = new SqlConnection(_connectionString))
+        using var connection = new SqlConnection(_connectionString);
+        connection.Open();
+
+        const string sql = @"
+            SELECT evth.Id,
+                   evth.HouseholdId,
+                   evth.HouseholdGuid,
+                   evth.VillageName,
+                   FORMAT(evth.Created,      'yyyy-MM-dd hh:mm tt') AS CreatedDetail,
+                   FORMAT(evth.LastModified, 'yyyy-MM-dd hh:mm tt') AS UpdatedDetail,
+                   evth.HouseholdHead,
+                   evth.CommunityClassification,
+                   '' AS PMTScore,
+                   evth.ContactNumber,
+                   evth.PhysicalAddress,
+                   CASE
+                       WHEN evth.ListingStatusId = 1 THEN 'No Status'
+                       WHEN evth.ListingStatusId = 2 THEN 'Listing And CBC Synched'
+                       WHEN evth.ListingStatusId = 3 THEN 'New Household Synched'
+                       WHEN evth.ListingStatusId = 4 THEN 'Disolved Or Duplicate Household Synched'
+                   END AS ListingStatus,
+                   CASE
+                       WHEN evth.CollectionStatusId = 1 THEN 'No Status'
+                       WHEN evth.CollectionStatusId = 2 THEN 'Enumeration Synched'
+                   END AS CollectionStatus
+            FROM [staging].PackageEventHousehold evth
+            INNER JOIN [staging].PackageEvent evt ON evth.PackageEventId = evt.Id
+            WHERE evt.Id = @PackageEventId
+            ORDER BY evth.Id
+            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+
+            SELECT COUNT(1)
+            FROM [staging].PackageEventHousehold evth
+            INNER JOIN [staging].PackageEvent evt ON evth.PackageEventId = evt.Id
+            WHERE evt.Id = @PackageEventId;";
+
+        using var multi = await connection.QueryMultipleAsync(sql, new
         {
-            connection.Open();
+            PackageEventId = packageEventId,
+            Offset         = pagination.Offset,
+            PageSize       = pagination.PageSize
+        });
 
-            var sql =
-                $@"SELECT   evth.Id,
-                            evth.HouseholdId,
-		                    evth.HouseholdGuid,
-		                    evth.VillageName,
-		                    FORMAT (evth.Created, 'yyyy-MM-dd hh:mm tt') AS CreatedDetail,
-		                    FORMAT (evth.LastModified, 'yyyy-MM-dd hh:mm tt') AS UpdatedDetail,
-		                    evth.HouseholdHead,
-		                    evth.CommunityClassification,
-		                    '' AS PMTScore,
-		                    evth.ContactNumber,
-		                    evth.PhysicalAddress,
-		                    CASE 
-			                    WHEN evth.ListingStatusId = 1 THEN 'No Status'
-			                    WHEN evth.ListingStatusId = 2 THEN 'Listing And CBC Synched'
-			                    WHEN evth.ListingStatusId = 3 THEN 'New Household Synched'
-			                    WHEN evth.ListingStatusId = 4 THEN 'Disolved Or Duplicate Household Synched'
-		                    END AS ListingStatus,
-		                    CASE 
-			                    WHEN evth.CollectionStatusId = 1 THEN 'No Status'
-			                    WHEN evth.CollectionStatusId = 2 THEN 'Enumeration Synched'
-		                    END AS CollectionStatus
-                    FROM [staging].PackageEventHousehold evth
-                    INNER JOIN [staging].PackageEvent evt ON evth.PackageEventId = evt.Id
-                    WHERE evt.Id = {packageEventId}";
+        var households = (await multi.ReadAsync<PackageEventHouseholdDto>()).AsList();
+        var totalCount = await multi.ReadSingleAsync<int>();
 
-            var households = await connection.QueryAsync<PackageEventHouseholdDto>(sql);
+        await BatchPopulateAsync(households, connection);
 
-            await BatchPopulateAsync(households.AsList(), connection);
-
-            return households;
-        }
+        return new PagedResult<PackageEventHouseholdDto>(households, totalCount, pagination.Page, pagination.PageSize);
     }
 
     private async Task<FormDto> LoadFormAsync(int formId, SqlConnection connection)
@@ -1010,5 +1053,228 @@ public class PackageQueries
             UpdatedDetail = UpdatedDetail,
             HouseholdMemberAttributes = attrs
         };
+    }
+
+    public async Task<DashboardFilterOptionsDto> GetDashboardFilterOptionsAsync()
+    {
+        using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        const string sql = @"
+        SELECT DISTINCT ISNULL(pac.ParentOrgUnitName, 'Unknown') AS District
+        FROM   staging.Package pac
+        WHERE  pac.ParentOrgUnitName IS NOT NULL AND pac.ParentOrgUnitName != ''
+        ORDER  BY District;
+
+        SELECT pac.Id,
+               ISNULL(pac.UniqueCode + ' – ', '') + ISNULL(pac.[Description], 'Package ' + CAST(pac.Id AS VARCHAR)) AS Label,
+               ISNULL(pac.ParentOrgUnitName, 'Unknown') AS District
+        FROM   staging.Package pac
+        ORDER  BY pac.ParentOrgUnitName, pac.Id;
+        ";
+
+        using var multi = await connection.QueryMultipleAsync(sql);
+
+        var districts = (await multi.ReadAsync<string>()).ToList();
+        var packages  = (await multi.ReadAsync<DashboardPackageOptionDto>()).ToList();
+
+        return new DashboardFilterOptionsDto
+        {
+            Districts = districts,
+            Packages  = packages
+        };
+    }
+
+    public async Task<DashboardStatsDto> GetDashboardStatsAsync(string? district = null, int? packageId = null)
+    {
+        using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        const string sql = @"
+        -- 1. Overall household counts
+        SELECT
+            COUNT(*)                                                                                          AS TotalHouseholds,
+            SUM(CASE WHEN hh.ListingStatusId  = 2 THEN 1 ELSE 0 END)                                        AS TotalListed,
+            SUM(CASE WHEN hh.CollectionStatusId = 2 THEN 1 ELSE 0 END)                                      AS TotalCollected,
+            SUM(CASE WHEN hh.ListingStatusId = 2 AND hh.CollectionStatusId = 1 THEN 1 ELSE 0 END)           AS TotalPending,
+            SUM(CASE WHEN hh.CollectionStatusId = 2 AND hh.Accepted_Status  = 1 THEN 1 ELSE 0 END)          AS TotalAccepted,
+            SUM(CASE WHEN hh.CollectionStatusId = 2 AND hh.Rejected_Status  = 1 THEN 1 ELSE 0 END)          AS TotalRejected,
+            SUM(CASE WHEN hh.CollectionStatusId = 2
+                          AND hh.Accepted_ChangeDate IS NULL
+                          AND hh.Rejected_ChangeDate IS NULL THEN 1 ELSE 0 END)                              AS TotalUnassigned
+        FROM   staging.PackageEventHousehold hh
+        INNER  JOIN staging.PackageEvent pe  ON pe.Id  = hh.PackageEventId
+        INNER  JOIN staging.Package      pac ON pac.Id = pe.PackageId
+        WHERE  (@District  IS NULL OR pac.ParentOrgUnitName = @District)
+          AND  (@PackageId IS NULL OR pe.PackageId          = @PackageId);
+
+        -- 2. Total data flags
+        SELECT COUNT(*) AS TotalFlags
+        FROM   staging.PackageEventDataFlag flag
+        INNER  JOIN staging.PackageEvent pe  ON pe.Id  = flag.PackageEventId
+        INNER  JOIN staging.Package      pac ON pac.Id = pe.PackageId
+        WHERE  (@District  IS NULL OR pac.ParentOrgUnitName = @District)
+          AND  (@PackageId IS NULL OR pe.PackageId          = @PackageId);
+
+        -- 3. Per-package-event progress
+        SELECT
+            pe.Id                                                                          AS PackageEventId,
+            pe.OrgUnitName,
+            CASE pe.PackageStatusId
+                WHEN 1 THEN 'Stage Preparation'
+                WHEN 2 THEN 'Data Management'
+                WHEN 3 THEN 'Data Acceptance'
+                WHEN 4 THEN 'Gateway'
+                ELSE 'Unknown'
+            END                                                                            AS PackageStatus,
+            COUNT(hh.Id)                                                                   AS TotalHouseholds,
+            SUM(CASE WHEN hh.ListingStatusId  = 2 THEN 1 ELSE 0 END)                      AS Listed,
+            SUM(CASE WHEN hh.CollectionStatusId = 2 THEN 1 ELSE 0 END)                    AS Collected,
+            SUM(CASE WHEN hh.Accepted_Status = 1    THEN 1 ELSE 0 END)                    AS Accepted,
+            SUM(CASE WHEN hh.Rejected_Status = 1    THEN 1 ELSE 0 END)                    AS Rejected,
+            ISNULL(f.FlagCount, 0)                                                         AS Flags
+        FROM   staging.PackageEvent pe
+        INNER  JOIN staging.Package pac ON pac.Id = pe.PackageId
+        LEFT   JOIN staging.PackageEventHousehold hh ON hh.PackageEventId = pe.Id
+        LEFT   JOIN (
+            SELECT PackageEventId, COUNT(*) AS FlagCount
+            FROM   staging.PackageEventDataFlag
+            GROUP  BY PackageEventId
+        ) f ON f.PackageEventId = pe.Id
+        WHERE  (@District  IS NULL OR pac.ParentOrgUnitName = @District)
+          AND  (@PackageId IS NULL OR pe.PackageId          = @PackageId)
+        GROUP  BY pe.Id, pe.OrgUnitName, pe.PackageStatusId, f.FlagCount
+        ORDER  BY pe.Id DESC;
+
+        -- 4. Daily collection trend – last 14 days
+        SELECT
+            FORMAT(CAST(syn.PayloadProcessedDate AS DATE), 'yyyy-MM-dd') AS Date,
+            COUNT(DISTINCT syn.PackageEventHouseholdId)                   AS Count
+        FROM   staging.PackageEventHouseholdSynch syn
+        INNER  JOIN staging.PackageEventHousehold hh ON hh.Id  = syn.PackageEventHouseholdId
+        INNER  JOIN staging.PackageEvent          pe  ON pe.Id  = hh.PackageEventId
+        INNER  JOIN staging.Package               pac ON pac.Id = pe.PackageId
+        WHERE  syn.PayloadProcessedDate >= DATEADD(DAY, -13, CAST(GETDATE() AS DATE))
+          AND  syn.PayloadProcessedId = 2
+          AND  (@District  IS NULL OR pac.ParentOrgUnitName = @District)
+          AND  (@PackageId IS NULL OR pe.PackageId          = @PackageId)
+        GROUP  BY CAST(syn.PayloadProcessedDate AS DATE)
+        ORDER  BY CAST(syn.PayloadProcessedDate AS DATE);
+
+        -- 5. Top 10 flagged villages
+        SELECT TOP 10
+            hh.VillageName,
+            COUNT(*) AS FlagCount
+        FROM   staging.PackageEventDataFlag flag
+        INNER  JOIN staging.PackageEventHousehold hh ON hh.Id  = flag.PackageEventHouseholdId
+        INNER  JOIN staging.PackageEvent          pe  ON pe.Id  = hh.PackageEventId
+        INNER  JOIN staging.Package               pac ON pac.Id = pe.PackageId
+        WHERE  hh.VillageName IS NOT NULL AND hh.VillageName != ''
+          AND  (@District  IS NULL OR pac.ParentOrgUnitName = @District)
+          AND  (@PackageId IS NULL OR pe.PackageId          = @PackageId)
+        GROUP  BY hh.VillageName
+        ORDER  BY FlagCount DESC;
+        ";
+
+        using var multi = await connection.QueryMultipleAsync(sql, new { District = district, PackageId = packageId });
+
+        var counts    = await multi.ReadSingleAsync<dynamic>();
+        var flagTotal = await multi.ReadSingleAsync<dynamic>();
+        var progress  = (await multi.ReadAsync<PackageEventProgressDto>()).ToList();
+        var trend     = (await multi.ReadAsync<DailyCollectionDto>()).ToList();
+        var villages  = (await multi.ReadAsync<VillageFlagCountDto>()).ToList();
+
+        return new DashboardStatsDto
+        {
+            TotalHouseholds      = (int)counts.TotalHouseholds,
+            TotalListed          = (int)counts.TotalListed,
+            TotalCollected       = (int)counts.TotalCollected,
+            TotalPending         = (int)counts.TotalPending,
+            TotalAccepted        = (int)counts.TotalAccepted,
+            TotalRejected        = (int)counts.TotalRejected,
+            TotalUnassigned      = (int)counts.TotalUnassigned,
+            TotalFlags           = (int)flagTotal.TotalFlags,
+            PackageEventProgress = progress,
+            DailyCollectionTrend = trend,
+            TopFlaggedVillages   = villages
+        };
+    }
+
+    public async Task<IEnumerable<DashboardMapPointDto>> GetHouseholdMapPointsAsync(string? district = null, int? packageId = null)
+    {
+        using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        // GPS is stored in the raw JSON payload of listing synch records under the
+        // 'gpsLocation' field (DataListingEventDetail model). The MetaAttribute table
+        // is never written to, so we parse directly from the payload JSON.
+        const string sql = @"
+        SELECT
+            COALESCE(peh.VillageName, '')   AS VillageName,
+            COALESCE(peh.HouseholdHead, '') AS HouseholdHead,
+            CASE WHEN peh.CollectionStatusId = 2 THEN 1 ELSE 0 END AS IsCollected,
+            gps.GpsLocation
+        FROM staging.PackageEventHousehold peh
+        INNER JOIN staging.PackageEvent  pe  ON pe.Id  = peh.PackageEventId
+        INNER JOIN staging.Package       pac ON pac.Id = pe.PackageId
+        CROSS APPLY (
+            SELECT TOP 1 JSON_VALUE(s.Payload, '$.gpsLocation') AS GpsLocation
+            FROM staging.PackageEventHouseholdSynch s
+            WHERE s.PackageEventHouseholdId = peh.Id
+              AND JSON_VALUE(s.Payload, '$.gpsLocation') IS NOT NULL
+              AND JSON_VALUE(s.Payload, '$.gpsLocation') != ''
+            ORDER BY s.Created DESC
+        ) gps
+        WHERE (@District  IS NULL OR pac.ParentOrgUnitName = @District)
+          AND (@PackageId IS NULL OR pe.PackageId          = @PackageId)";
+
+        var rows = await connection.QueryAsync<HouseholdMapRow>(sql, new { District = district, PackageId = packageId });
+
+        var points = new List<DashboardMapPointDto>();
+        foreach (var row in rows)
+        {
+            if (TryParseGps(row.GpsLocation, out var lat, out var lng))
+            {
+                points.Add(new DashboardMapPointDto
+                {
+                    Lat           = lat,
+                    Lng           = lng,
+                    IsCollected   = row.IsCollected,
+                    VillageName   = row.VillageName,
+                    HouseholdHead = row.HouseholdHead
+                });
+            }
+        }
+        return points;
+    }
+
+    private record HouseholdMapRow
+    {
+        public string VillageName   { get; init; }
+        public string HouseholdHead { get; init; }
+        public bool   IsCollected   { get; init; }
+        public string GpsLocation   { get; init; }
+    }
+
+    private static bool TryParseGps(string gps, out double lat, out double lng)
+    {
+        lat = 0; lng = 0;
+        if (string.IsNullOrWhiteSpace(gps)) return false;
+
+        // Try comma separator first ("lat,lng"), then space ("lat lng")
+        var separators = new[] { ',', ' ' };
+        foreach (var sep in separators)
+        {
+            var parts = gps.Split(sep, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 2
+                && double.TryParse(parts[0].Trim(), System.Globalization.NumberStyles.Float,
+                       System.Globalization.CultureInfo.InvariantCulture, out lat)
+                && double.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float,
+                       System.Globalization.CultureInfo.InvariantCulture, out lng))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 }

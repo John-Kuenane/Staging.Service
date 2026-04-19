@@ -341,4 +341,6 @@ healthchecksdb
 
 # Local-only files
 .claude/
+justforreference
 script.sql
+.vs/

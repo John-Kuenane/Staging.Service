@@ -16,6 +16,9 @@ public static class PackagesApi
 
         api.MapGet("/", GetPackagesForDeviceAsync);
         api.MapGet("/packages-for-management", GetPackagesForManagementAsync);
+        api.MapGet("/dashboard-filter-options", GetDashboardFilterOptionsAsync);
+        api.MapGet("/dashboard-stats", GetDashboardStatsAsync);
+        api.MapGet("/dashboard-map-points", GetHouseholdMapPointsAsync);
         api.MapPut("/upload", SavePayloadAsync);
 
         api.MapGet("{packageId:int}", GetPackageForManagementAsync);
@@ -85,7 +88,8 @@ public static class PackagesApi
         [AsParameters] PackageServices services,
         [FromQuery] PackageEventHouseholdFilter filter = PackageEventHouseholdFilter.Default,
         [FromQuery] int page = 1,
-        [FromQuery] int pageSize = PaginationRequest.DefaultPageSize)
+        [FromQuery] int pageSize = PaginationRequest.DefaultPageSize,
+        [FromQuery] string? village = null)
     {
         var pagination = new PaginationRequest(page, pageSize);
 
@@ -93,7 +97,8 @@ public static class PackagesApi
             .GetPackageEventHouseholdsForManagementAsync(
                 packageEventId,
                 filter,
-                pagination);
+                pagination,
+                village);
 
         var response = new PagedApiResponse<PackageEventHouseholdForManagementDto>(
             Value: pagedResult.Items,
@@ -200,16 +205,46 @@ public static class PackagesApi
         return TypedResults.Ok(response);
     }
 
-    public static async Task<Ok<IEnumerable<PackageEventHouseholdDto>>> GetCollectionPackageHouseholdsAsync(int packageEventId, [AsParameters] PackageServices services)
+    public static async Task<Ok<PagedApiResponse<PackageEventHouseholdDto>>> GetCollectionPackageHouseholdsAsync(
+        int packageEventId,
+        [AsParameters] PackageServices services,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = PaginationRequest.MaxPageSize)
     {
-        var households = await services.Queries.GetCollectionPackageHouseholdsAsync(packageEventId);
-        return TypedResults.Ok(households);
+        var pagination = new PaginationRequest(page, pageSize);
+        var pagedResult = await services.Queries.GetCollectionPackageHouseholdsAsync(packageEventId, pagination);
+
+        return TypedResults.Ok(new PagedApiResponse<PackageEventHouseholdDto>(
+            Value: pagedResult.Items,
+            RecordCount: pagedResult.TotalCount,
+            Pagination: new PaginationMeta(
+                TotalItems: pagedResult.TotalCount,
+                PageIndex:  pagination.Page - 1,
+                PageSize:   pagination.PageSize,
+                TotalPages: pagedResult.TotalPages
+            )
+        ));
     }
 
-    public static async Task<Ok<IEnumerable<PackageEventHouseholdDto>>> GetCommunityValidationPackageHouseholdsAsync(int packageEventId, [AsParameters] PackageServices services)
+    public static async Task<Ok<PagedApiResponse<PackageEventHouseholdDto>>> GetCommunityValidationPackageHouseholdsAsync(
+        int packageEventId,
+        [AsParameters] PackageServices services,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = PaginationRequest.MaxPageSize)
     {
-        var households = await services.Queries.GetCommunityValidationPackageHouseholdsAsync(packageEventId);
-        return TypedResults.Ok(households);
+        var pagination = new PaginationRequest(page, pageSize);
+        var pagedResult = await services.Queries.GetCommunityValidationPackageHouseholdsAsync(packageEventId, pagination);
+
+        return TypedResults.Ok(new PagedApiResponse<PackageEventHouseholdDto>(
+            Value: pagedResult.Items,
+            RecordCount: pagedResult.TotalCount,
+            Pagination: new PaginationMeta(
+                TotalItems: pagedResult.TotalCount,
+                PageIndex:  pagination.Page - 1,
+                PageSize:   pagination.PageSize,
+                TotalPages: pagedResult.TotalPages
+            )
+        ));
     }
 
     public static async Task<Results<Ok<int>, BadRequest<string>>> SavePayloadAsync(
@@ -426,6 +461,30 @@ public static class PackagesApi
         return TypedResults.Ok(commandResult);
     }
 
+    public static async Task<Ok<DashboardFilterOptionsDto>> GetDashboardFilterOptionsAsync(
+        [AsParameters] PackageServices services)
+    {
+        var options = await services.Queries.GetDashboardFilterOptionsAsync();
+        return TypedResults.Ok(options);
+    }
+
+    public static async Task<Ok<DashboardStatsDto>> GetDashboardStatsAsync(
+        [AsParameters] PackageServices services,
+        [FromQuery] string? district = null,
+        [FromQuery] int? packageId = null)
+    {
+        var stats = await services.Queries.GetDashboardStatsAsync(district, packageId);
+        return TypedResults.Ok(stats);
+    }
+
+    public static async Task<Ok<IEnumerable<DashboardMapPointDto>>> GetHouseholdMapPointsAsync(
+        [AsParameters] PackageServices services,
+        [FromQuery] string? district = null,
+        [FromQuery] int? packageId = null)
+    {
+        var points = await services.Queries.GetHouseholdMapPointsAsync(district, packageId);
+        return TypedResults.Ok(points);
+    }
 }
 
 
