@@ -1,4 +1,5 @@
 ﻿using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Caching.Memory;
 using Staging.API.Application.Common.Filters;
 using Staging.API.Application.Common.Pagination;
 using Staging.API.Application.Dtos;
@@ -10,10 +11,12 @@ public class PackageQueries
     : IPackageQueries
 {
     private string _connectionString = string.Empty;
+    private readonly IMemoryCache _cache;
 
-    public PackageQueries(string connectionString)
+    public PackageQueries(string connectionString, IMemoryCache cache)
     {
         _connectionString = !string.IsNullOrWhiteSpace(connectionString) ? connectionString : throw new ArgumentNullException(nameof(connectionString));
+        _cache = cache;
     }
 
     public async Task<PackageForManagementDto> GetPackageForManagementAsync(int packageId)
@@ -1202,49 +1205,60 @@ public class PackageQueries
 
     public async Task<IEnumerable<DashboardMapPointDto>> GetHouseholdMapPointsAsync(string? district = null, int? packageId = null)
     {
+        var cacheKey = $"map-points|{district}|{packageId}";
+        if (_cache.TryGetValue(cacheKey, out IEnumerable<DashboardMapPointDto> cached))
+            return cached;
+
         using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync();
 
-        // GPS is stored in the raw JSON payload of listing synch records under the
-        // 'gpsLocation' field (DataListingEventDetail model). The MetaAttribute table
-        // is never written to, so we parse directly from the payload JSON.
         const string sql = @"
-        SELECT
-            COALESCE(peh.VillageName, '')   AS VillageName,
-            COALESCE(peh.HouseholdHead, '') AS HouseholdHead,
-            CASE WHEN peh.CollectionStatusId = 2 THEN 1 ELSE 0 END AS IsCollected,
-            gps.GpsLocation
-        FROM staging.PackageEventHousehold peh
-        INNER JOIN staging.PackageEvent  pe  ON pe.Id  = peh.PackageEventId
-        INNER JOIN staging.Package       pac ON pac.Id = pe.PackageId
-        CROSS APPLY (
-            SELECT TOP 1 JSON_VALUE(s.Payload, '$.gpsLocation') AS GpsLocation
-            FROM staging.PackageEventHouseholdSynch s
-            WHERE s.PackageEventHouseholdId = peh.Id
-              AND JSON_VALUE(s.Payload, '$.gpsLocation') IS NOT NULL
-              AND JSON_VALUE(s.Payload, '$.gpsLocation') != ''
-            ORDER BY s.Created DESC
-        ) gps
-        WHERE (@District  IS NULL OR pac.ParentOrgUnitName = @District)
-          AND (@PackageId IS NULL OR pe.PackageId          = @PackageId)";
+        ;WITH Parsed AS (
+            SELECT
+                COALESCE(peh.VillageName, '')   AS VillageName,
+                COALESCE(peh.HouseholdHead, '') AS HouseholdHead,
+                CASE WHEN peh.CollectionStatusId = 2 THEN 1 ELSE 0 END AS IsCollected,
+                TRY_CAST(
+                    SUBSTRING(
+                        attr.Modified_Value,
+                        CHARINDEX('latitude: ', attr.Modified_Value) + 10,
+                        CHARINDEX(' - longitude', attr.Modified_Value)
+                            - (CHARINDEX('latitude: ', attr.Modified_Value) + 10)
+                    ) AS FLOAT
+                ) AS Lat,
+                TRY_CAST(
+                    SUBSTRING(
+                        attr.Modified_Value,
+                        CHARINDEX('longitude: ', attr.Modified_Value) + 11,
+                        LEN(attr.Modified_Value)
+                    ) AS FLOAT
+                ) AS Lng
+            FROM staging.PackageEventHousehold peh
+            INNER JOIN staging.PackageEvent  pe  ON pe.Id  = peh.PackageEventId
+            INNER JOIN staging.Package       pac ON pac.Id = pe.PackageId
+            INNER JOIN staging.PackageEventHouseholdAttribute attr
+                ON attr.PackageEventHouseholdId = peh.Id
+               AND attr.AttributeKey = 'GPS Coordinates'
+               AND attr.Modified_Value IS NOT NULL
+            WHERE (@District  IS NULL OR pac.ParentOrgUnitName = @District)
+              AND (@PackageId IS NULL OR pe.PackageId          = @PackageId)
+        )
+        SELECT VillageName, HouseholdHead, IsCollected, Lat, Lng
+        FROM Parsed
+        WHERE Lat IS NOT NULL AND Lng IS NOT NULL";
 
         var rows = await connection.QueryAsync<HouseholdMapRow>(sql, new { District = district, PackageId = packageId });
 
-        var points = new List<DashboardMapPointDto>();
-        foreach (var row in rows)
+        var points = rows.Select(r => new DashboardMapPointDto
         {
-            if (TryParseGps(row.GpsLocation, out var lat, out var lng))
-            {
-                points.Add(new DashboardMapPointDto
-                {
-                    Lat           = lat,
-                    Lng           = lng,
-                    IsCollected   = row.IsCollected,
-                    VillageName   = row.VillageName,
-                    HouseholdHead = row.HouseholdHead
-                });
-            }
-        }
+            Lat           = r.Lat,
+            Lng           = r.Lng,
+            IsCollected   = r.IsCollected,
+            VillageName   = r.VillageName,
+            HouseholdHead = r.HouseholdHead
+        }).ToList();
+
+        _cache.Set(cacheKey, points, TimeSpan.FromSeconds(90));
         return points;
     }
 
@@ -1253,28 +1267,7 @@ public class PackageQueries
         public string VillageName   { get; init; }
         public string HouseholdHead { get; init; }
         public bool   IsCollected   { get; init; }
-        public string GpsLocation   { get; init; }
-    }
-
-    private static bool TryParseGps(string gps, out double lat, out double lng)
-    {
-        lat = 0; lng = 0;
-        if (string.IsNullOrWhiteSpace(gps)) return false;
-
-        // Try comma separator first ("lat,lng"), then space ("lat lng")
-        var separators = new[] { ',', ' ' };
-        foreach (var sep in separators)
-        {
-            var parts = gps.Split(sep, StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length >= 2
-                && double.TryParse(parts[0].Trim(), System.Globalization.NumberStyles.Float,
-                       System.Globalization.CultureInfo.InvariantCulture, out lat)
-                && double.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float,
-                       System.Globalization.CultureInfo.InvariantCulture, out lng))
-            {
-                return true;
-            }
-        }
-        return false;
+        public double Lat           { get; init; }
+        public double Lng           { get; init; }
     }
 }

@@ -1,5 +1,6 @@
 ﻿using eStaging.API.Application.Validations;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Staging.API.Application.Mapper;
@@ -153,8 +154,11 @@ internal static class Extensions
         services.AddScoped<IExternalSubmissionRepository, ExternalSubmissionRepository>();
         services.AddScoped<IHouseholdIdAllocator, HouseholdIdAllocator>();
 
+        services.AddMemoryCache();
         services.AddScoped<IPackageQueries>(sp =>
-            new PackageQueries(builder.Configuration["ConnectionStrings:StagingDbContext"]));
+            new PackageQueries(
+                builder.Configuration["ConnectionStrings:StagingDbContext"],
+                sp.GetRequiredService<IMemoryCache>()));
 
         services.AddScoped<IExternalSubmissionQueries>(sp =>
             new ExternalSubmissionQueries(builder.Configuration["ConnectionStrings:StagingDbContext"]));
