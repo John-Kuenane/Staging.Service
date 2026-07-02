@@ -1096,15 +1096,15 @@ public class PackageQueries
         const string sql = @"
         -- 1. Overall household counts
         SELECT
-            COUNT(*)                                                                                          AS TotalHouseholds,
-            SUM(CASE WHEN hh.ListingStatusId  = 2 THEN 1 ELSE 0 END)                                        AS TotalListed,
-            SUM(CASE WHEN hh.CollectionStatusId = 2 THEN 1 ELSE 0 END)                                      AS TotalCollected,
-            SUM(CASE WHEN hh.ListingStatusId = 2 AND hh.CollectionStatusId = 1 THEN 1 ELSE 0 END)           AS TotalPending,
-            SUM(CASE WHEN hh.CollectionStatusId = 2 AND hh.Accepted_Status  = 1 THEN 1 ELSE 0 END)          AS TotalAccepted,
-            SUM(CASE WHEN hh.CollectionStatusId = 2 AND hh.Rejected_Status  = 1 THEN 1 ELSE 0 END)          AS TotalRejected,
-            SUM(CASE WHEN hh.CollectionStatusId = 2
+            COUNT(*)                                                                                                   AS TotalHouseholds,
+            ISNULL(SUM(CASE WHEN hh.ListingStatusId  = 2 THEN 1 ELSE 0 END), 0)                                       AS TotalListed,
+            ISNULL(SUM(CASE WHEN hh.CollectionStatusId = 2 THEN 1 ELSE 0 END), 0)                                     AS TotalCollected,
+            ISNULL(SUM(CASE WHEN hh.ListingStatusId = 2 AND hh.CollectionStatusId = 1 THEN 1 ELSE 0 END), 0)          AS TotalPending,
+            ISNULL(SUM(CASE WHEN hh.CollectionStatusId = 2 AND hh.Accepted_Status  = 1 THEN 1 ELSE 0 END), 0)         AS TotalAccepted,
+            ISNULL(SUM(CASE WHEN hh.CollectionStatusId = 2 AND hh.Rejected_Status  = 1 THEN 1 ELSE 0 END), 0)         AS TotalRejected,
+            ISNULL(SUM(CASE WHEN hh.CollectionStatusId = 2
                           AND hh.Accepted_ChangeDate IS NULL
-                          AND hh.Rejected_ChangeDate IS NULL THEN 1 ELSE 0 END)                              AS TotalUnassigned
+                          AND hh.Rejected_ChangeDate IS NULL THEN 1 ELSE 0 END), 0)                                   AS TotalUnassigned
         FROM   staging.PackageEventHousehold hh
         INNER  JOIN staging.PackageEvent pe  ON pe.Id  = hh.PackageEventId
         INNER  JOIN staging.Package      pac ON pac.Id = pe.PackageId
@@ -1130,11 +1130,11 @@ public class PackageQueries
                 WHEN 4 THEN 'Gateway'
                 ELSE 'Unknown'
             END                                                                            AS PackageStatus,
-            COUNT(hh.Id)                                                                   AS TotalHouseholds,
-            SUM(CASE WHEN hh.ListingStatusId  = 2 THEN 1 ELSE 0 END)                      AS Listed,
-            SUM(CASE WHEN hh.CollectionStatusId = 2 THEN 1 ELSE 0 END)                    AS Collected,
-            SUM(CASE WHEN hh.Accepted_Status = 1    THEN 1 ELSE 0 END)                    AS Accepted,
-            SUM(CASE WHEN hh.Rejected_Status = 1    THEN 1 ELSE 0 END)                    AS Rejected,
+            COUNT(hh.Id)                                                                          AS TotalHouseholds,
+            ISNULL(SUM(CASE WHEN hh.ListingStatusId  = 2 THEN 1 ELSE 0 END), 0)               AS Listed,
+            ISNULL(SUM(CASE WHEN hh.CollectionStatusId = 2 THEN 1 ELSE 0 END), 0)             AS Collected,
+            ISNULL(SUM(CASE WHEN hh.Accepted_Status = 1    THEN 1 ELSE 0 END), 0)             AS Accepted,
+            ISNULL(SUM(CASE WHEN hh.Rejected_Status = 1    THEN 1 ELSE 0 END), 0)             AS Rejected,
             ISNULL(f.FlagCount, 0)                                                         AS Flags
         FROM   staging.PackageEvent pe
         INNER  JOIN staging.Package pac ON pac.Id = pe.PackageId

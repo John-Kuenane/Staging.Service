@@ -1,4 +1,4 @@
-﻿namespace Staging.API.Infrastructure.BackgroundProcessing;
+namespace Staging.API.Infrastructure.BackgroundProcessing;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -31,12 +31,17 @@ public sealed class WorkerProcessorService<TWorkItem, TOptions, TMonitor> : Back
 
     public override async Task StartAsync(CancellationToken ct)
     {
-        // One place for “requeue pending at startup”
-        // Resolve scoped processor inside a scope
-        using (var scope = _scopeFactory.CreateScope())
+        try
         {
+            using var scope = _scopeFactory.CreateScope();
             var processor = scope.ServiceProvider.GetRequiredService<IWorkerProcessor<TWorkItem>>();
             await processor.SeedAsync(_queue, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Seed failed for {Worker} - startup will continue without resetting in-progress items",
+                typeof(TWorkItem).Name);
         }
 
         await base.StartAsync(ct);
@@ -62,7 +67,6 @@ public sealed class WorkerProcessorService<TWorkItem, TOptions, TMonitor> : Back
             {
                 try
                 {
-                    // ✅ Scope-per-item: safest with EF DbContext / tracking
                     using var scope = _scopeFactory.CreateScope();
                     var processor = scope.ServiceProvider.GetRequiredService<IWorkerProcessor<TWorkItem>>();
 
